@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "노벨피아 스팀 스타일 소설 평가 시스템",
+  "version": "1.9.0",
+  "description": "노벨피아 소설 표지를 우클릭하여 스팀 스타일 추천도를 분석합니다.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://novelpia.com/*",
+    "https://novelpia.net/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://novelpia.com/*",
+        "https://novelpia.net/*"
+      ],
+      "js": ["engine.js", "content.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["styles.css"],
+      "matches": ["https://novelpia.com/*", "https://novelpia.net/*"]
+    }
+  ],
+  "icons": {
+    "128": "128.png"
+  }
+}

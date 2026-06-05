@@ -51,9 +51,9 @@
 
 ### 3️⃣ 📱 모바일용 Tampermonkey 유저스크립트
 
-> **추천 대상:** 키위 브라우저(Kiwi Browser) 등 모바일에서도 탬퍼몽키를 통해 연독률을 확인하고 싶으신 분
+> **추천 대상:** 마이크로소프트 엣지(Edge), 키위 브라우저(Kiwi Browser) 등 모바일에서도 탬퍼몽키를 통해 연독률을 확인하고 싶으신 분
 
-1. 모바일 환경에서 유저스크립트를 지원하는 브라우저(예: Kiwi Browser)를 설치하고 Tampermonkey 확장 프로그램을 추가합니다.
+1. 모바일 환경에서 유저스크립트를 지원하는 브라우저(예: Edge, Kiwi Browser)를 설치하고 Tampermonkey 확장 프로그램을 추가합니다.
 2. `tampermonkey/tampermonkey(forMobile).js` 파일의 소스코드를 전체 복사합니다.
 3. 모바일 Tampermonkey에 새 스크립트로 추가하고 저장합니다.
 4. **사용법:** 노벨피아 웹사이트에서 소설 표지 이미지를 약 **0.6초(600ms) 동안 꾹 누르고 있으면(Long Press)** 분석 모달이 표시됩니다.

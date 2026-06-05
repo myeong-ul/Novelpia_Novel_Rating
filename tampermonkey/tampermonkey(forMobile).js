@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         노벨피아 스팀 스타일 연독/계산기 for Mobile(Steam Novel Rating)
 // @namespace    https://novelpia.com/
-// @version      2.0.1
+// @version      2.0.1_dev
 // @description  노벨피아 소설 표지를 우클릭하면 스팀 스타일의 다차원 평점 및 연독률 지표 모달을 제공합니다.
 // @author       AI Assistant
 // @match        http://*.novelpia.com/*
@@ -21,7 +21,7 @@
     const cssStyle = `
         #steam-rating-modal {
             position: fixed !important;
-            z-index: 10000 !important;
+            z-index: 999999 !important;
             left: 50% !important;
             top: 50% !important;
             bottom: auto !important; /* 상단 고정 기준점 활성화 */
@@ -87,7 +87,7 @@
 
         #steam-stat-tooltip {
             position: fixed !important;
-            z-index: 10001 !important; /* 모달보다 한 단계 위 */
+            z-index: 1000000 !important; /* 모달보다 한 단계 위 */
             left: 50% !important;
             top: 50% !important;
             bottom: auto !important;
@@ -512,9 +512,11 @@
         tagAdjustEnabled: GM_getValue('tagAdjustEnabled', true)
     };
 
+    // 1. 툴팁 생성 및 HTML 직속 자식으로 등록
     const tooltip = document.createElement('div');
     tooltip.id = 'steam-stat-tooltip';
-    document.body.appendChild(tooltip);
+    // 부모 요소들의 transform 오염을 피하기 위해 문서 최상위에 삽입
+    document.documentElement.appendChild(tooltip);
 
     function showTooltip(e, htmlContent) {
         if(!htmlContent) return;
@@ -616,10 +618,11 @@
         </div>
         <div class="steam-tip">
             ⚠️ 이 평가는 전수 조사 데이터를 통한 매핑 결과로, 절대적인 기준이 아닙니다.<br>
-            💡 더블 우클릭하면 브라우저 기본 우클릭 메뉴가 열립니다.
+            💡 지표 행을 터치하면 상세 분석 툴팁이 토글됩니다.
         </div>
     `;
-    document.body.appendChild(modal);
+    // 모달창 역시 최상위 HTML 노드로 이동시켜 스크롤 깨짐 방지
+    document.documentElement.appendChild(modal);
 
     // 초기 체크박스 상태 동기화
     document.getElementById('setting-close-on-scroll').checked = settings.closeOnScroll;
@@ -746,7 +749,7 @@
     }
 
 // -------------------------------------------------------------------------
-    // 모바일 터치 (Long Press) 및 정중앙 배치 제어 처리부
+    // 모바일 터치 (Long Press) 및 정중앙 배치 제어 처리부 (showTooltip 복구 버전)
     // -------------------------------------------------------------------------
     let touchTimer = null;
     let isLongPressActive = false;
@@ -757,7 +760,7 @@
     document.addEventListener('touchstart', (e) => {
         if (!isCoverImage(e.target)) return;
 
-        // 새로운 터치 시 기존 툴팁 즉시 초기화
+        // 새로운 터치 시 기존 툴팁 즉시 닫기
         hideTooltip();
 
         const touch = e.touches[0];
@@ -794,11 +797,11 @@
         }
     }, { passive: false });
 
-    // 4. 모바일 전용 분석창 정중앙 고정 기능 (스크롤 버그 완전 수정)
+    // 4. 모바일 전용 분석창 화면 정중앙 고정 기능
     async function triggerAnalysis(clickedEl) {
         hideTooltip();
 
-        // 스크롤 위치에 영항받지 않도록 인라인 스타일 최소화 (CSS에서 처리하도록 유도)
+        // 스크롤 위치에 오염되지 않도록 fixed 레이아웃 고정
         modal.style.position = 'fixed';
         modal.style.width = `${Math.min(390, window.innerWidth * 0.9)}px`;
         modal.style.display = 'block';
@@ -862,6 +865,7 @@
             document.getElementById('steam-modal-cycle-val').textContent = `${rd.cycleText} (${rd.cycleScore}점)`;
             document.getElementById('steam-modal-cycle-bar').style.width = `${rd.cycleScore}%`;
 
+            // 데이터셋에 툴팁 데이터 매핑
             document.getElementById('steam-row-rec').dataset.tip     = rd.recTooltip;
             document.getElementById('steam-row-ret').dataset.tip     = rd.retTooltip;
             document.getElementById('steam-row-hl').dataset.tip      = rd.halfLifeTooltip;
@@ -878,31 +882,38 @@
     // 닫기 버튼 이벤트
     document.getElementById('steam-modal-close').addEventListener('click', () => { modal.style.display = 'none'; hideTooltip(); });
 
-    // 5. 모바일 툴팁 대응 (터치 시 화면 정중앙 고정)
+    // 5. 모바일 툴팁 대응 (지표 행 터치 시 기존 showTooltip 함수를 호출하여 화면 정중앙 출력)
     ['rec', 'ret', 'hl', 'comment', 'cycle'].forEach(k => {
         const row = document.getElementById(`steam-row-${k}`);
 
         row.addEventListener('click', (e) => {
-            e.stopPropagation();
+            e.stopPropagation(); // 부모 터치 이벤트 전파 방지
 
+            // 동일한 지표를 다시 클릭했다면 토글 형식으로 닫기
             if (tooltip.style.display === 'block' && tooltip.dataset.owner === k) {
                 hideTooltip();
             } else {
+                const tipContent = row.dataset.tip;
+                if (!tipContent) return; // 분석 대기 중 혹은 값이 없으면 미작동
+
                 tooltip.dataset.owner = k;
 
-                tooltip.innerHTML = row.dataset.tip || '';
-                if(!row.dataset.tip) return;
+                // 기존 스크립트에 상단 정의된 상용구 함수인 'showTooltip'을 호출하되,
+                // e(마우스 이벤트) 대신 더미 오브젝트나 null을 넘겨 스크롤 버그가 안 나게 우회하고 컨텐츠를 주입합니다.
+                showTooltip(null, tipContent);
 
+                // showTooltip 실행 후 화면 fixed 정중앙 레이아웃으로 강제 재정렬
                 tooltip.style.position = 'fixed';
-                tooltip.style.width = `${Math.min(280, window.innerWidth * 0.85)}px`;
-                tooltip.style.display = 'block';
+                tooltip.style.left = '50%';
+                tooltip.style.top = '50%';
+                tooltip.style.transform = 'translate(-50%, -50%)';
+                tooltip.style.width = `${Math.min(290, window.innerWidth * 0.85)}px`;
             }
         });
     });
 
-    // 6. 모달창 외부 터치 시 닫기 핸들러
+    // 6. 모달창 및 툴팁 외부 영역 터치 제어 (닫기 라이프사이클)
     document.addEventListener('touchstart', (e) => {
-        // 툴팁 활성화 중일 때 툴팁 영역 외부 터치 시 툴팁만 닫기
         if (tooltip.style.display === 'block' && !tooltip.contains(e.target)) {
             hideTooltip();
             e.stopPropagation();

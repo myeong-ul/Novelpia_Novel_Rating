@@ -244,19 +244,35 @@ const Engine = {
         let commentScore = 50, sumLikes = 0, commentText = "댓글 없음", commentTooltip = '';
         if (commentRows?.length > 0) {
             const likes = [];
+            const processedId = new Set(); // 중복 파싱 방지 보틀넥 필터
+
             commentRows.forEach(el => {
+                // 대댓글(답글)이거나 이미 처리한 댓글 아이디 패스
                 if (el.classList.contains('comment_re')) return;
+                const cId = el.getAttribute('id') || el.dataset.id;
+                if (cId && processedId.has(cId)) return;
+                if (cId) processedId.add(cId);
+
                 const m = el.querySelector('[id^="comment_vote_"]')?.textContent.match(/추천\s*\((\d+)\s*건\)/);
                 if (m) likes.push(parseInt(m[1]));
             });
+
             if (likes.length > 0) {
+                // 가장 추천이 많은 상위 베댓 정렬
                 likes.sort((a, b) => b - a);
                 sumLikes = likes.slice(0, 3).reduce((a, b) => a + b, 0);
-                const sAbs = Math.min(100, (sumLikes / 1000) * 100);
-                const sRel = Math.min(100, ((sumLikes / Math.max(100, views / Math.max(1, episodes))) / 0.08) * 100);
+
+                // 추천순 강제 정렬 피드백 반영 점수 스케일링 보정
+                const sAbs = Math.min(100, (sumLikes / 600) * 100);
+                const sRel = Math.min(100, ((sumLikes / Math.max(100, views / Math.max(1, episodes))) / 0.06) * 100);
+
                 commentScore = Math.round(sAbs * 0.4 + sRel * 0.6);
                 commentText = `상위 베댓 추천합 ${this.fmt(sumLikes)}개`;
-                commentTooltip = `<div class="tip-header">💬 독자 상호작용</div>베댓 추천합: ${this.fmt(sumLikes)}`;
+                commentTooltip = `<div class="tip-header">💬 독자 상호작용 (추천순 정렬 수집)</div>` +
+                    `상위 베스트 댓글 3개 추천 총합입니다.\n` +
+                    `<span class="tip-sep">─────────────────────</span>\n` +
+                    `베댓 추천합: ${this.fmt(sumLikes)}개\n` +
+                    `반영 점수: ${commentScore}점`;
             }
         }
 

@@ -327,23 +327,39 @@
                 cycleScore = 100;
             }
 
-            // ── 베댓 상호작용 점수 ──
+            // ── 3. 베댓 상호작용 점수 ──
             let commentScore = 50, sumLikes = 0, commentText = "댓글 없음", commentTooltip = '';
             if (commentRows?.length > 0) {
                 const likes = [];
+                const processedId = new Set(); // 중복 파싱 방지 보틀넥 필터
+
                 commentRows.forEach(el => {
+                    // 대댓글(답글)이거나 이미 처리한 댓글 아이디 패스
                     if (el.classList.contains('comment_re')) return;
+                    const cId = el.getAttribute('id') || el.dataset.id;
+                    if (cId && processedId.has(cId)) return;
+                    if (cId) processedId.add(cId);
+
                     const m = el.querySelector('[id^="comment_vote_"]')?.textContent.match(/추천\s*\((\d+)\s*건\)/);
                     if (m) likes.push(parseInt(m[1]));
                 });
+
                 if (likes.length > 0) {
+                    // 가장 추천이 많은 상위 베댓 정렬
                     likes.sort((a, b) => b - a);
                     sumLikes = likes.slice(0, 3).reduce((a, b) => a + b, 0);
-                    const sAbs = Math.min(100, (sumLikes / 1000) * 100);
-                    const sRel = Math.min(100, ((sumLikes / Math.max(100, views / Math.max(1, episodes))) / 0.08) * 100);
+
+                    // 추천순 강제 정렬 피드백 반영 점수 스케일링 보정
+                    const sAbs = Math.min(100, (sumLikes / 600) * 100);
+                    const sRel = Math.min(100, ((sumLikes / Math.max(100, views / Math.max(1, episodes))) / 0.06) * 100);
+
                     commentScore = Math.round(sAbs * 0.4 + sRel * 0.6);
                     commentText = `상위 베댓 추천합 ${this.fmt(sumLikes)}개`;
-                    commentTooltip = `<div class="tip-header">💬 독자 상호작용</div>베댓 추천합: ${this.fmt(sumLikes)}`;
+                    commentTooltip = `<div class="tip-header">💬 독자 상호작용 (추천순 정렬 수집)</div>` +
+                        `상위 베스트 댓글 3개 추천 총합입니다.\n` +
+                        `<span class="tip-sep">─────────────────────</span>\n` +
+                        `베댓 추천합: ${this.fmt(sumLikes)}개\n` +
+                        `반영 점수: ${commentScore}점`;
                 }
             }
 
@@ -575,9 +591,28 @@
 
         let commentRows = [];
         try {
-            const ch = await postForm(`/proc/novel_comment/${novelId}?page=1`, {});
+            // [해결책]: 현재 브라우저의 원래 댓글 정렬 설정을 백업합니다.
+            const originalSortCookie = document.cookie.match(/(?:^|; )COMMENT_SORT=([^;]*)/)?.[1] || '';
+
+            // 노벨피아 서버가 추천순을 강제 인식하도록 브라우저 쿠키를 'vote'로 임시 변경합니다.
+            document.cookie = "COMMENT_SORT=vote; path=/; domain=.novelpia.com; max-age=5;";
+
+            // API 호출 (FormData 형식과 쿼리 스트링 두 영역 모두에 안전하게 정렬 세팅 반영)
+            const ch = await postForm(`/proc/novel_comment/${novelId}?page=1&sort=vote`, { sort: "vote" });
+
+            // 데이터를 안전하게 파싱합니다.
             commentRows = Array.from(new DOMParser().parseFromString(ch, 'text/html').querySelectorAll('._comment_flag'));
-        } catch(e) {}
+
+            // [복구]: 분석 요청이 끝난 즉시 유저가 원래 사용하던 댓글 정렬 상태로 원래대로 되돌립니다.
+            if (originalSortCookie) {
+                document.cookie = `COMMENT_SORT=${originalSortCookie}; path=/; domain=.novelpia.com;`;
+            } else {
+                // 기존 쿠키가 없었다면 임시 쿠키를 만료시켜 삭제합니다.
+                document.cookie = "COMMENT_SORT=; path=/; domain=.novelpia.com; max-age=0;";
+            }
+        } catch(e) {
+            console.error("[SteamNovel] 댓글 수집 실패:", e);
+        }
 
         return { stats, commentRows, novelTitle, isComplete, isAdult, hasTS };
     }

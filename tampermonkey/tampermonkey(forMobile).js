@@ -518,22 +518,49 @@
     // 부모 요소들의 transform 오염을 피하기 위해 문서 최상위에 삽입
     document.documentElement.appendChild(tooltip);
 
-    function showTooltip(e, htmlContent) {
-        if(!htmlContent) return;
+    // =========================================================================
+    // 툴팁 및 제어 함수 정의 (모바일 고정 및 PC 우회 완벽 지원)
+    // =========================================================================
+    function showTooltip(htmlContent, isMobileCenter = false) {
+        if (!htmlContent) return;
         tooltip.innerHTML = htmlContent;
         tooltip.style.display = 'block';
-        moveTooltip(e);
+
+        if (isMobileCenter) {
+            // 모바일 지표 터치 시: 마우스 좌표와 무관하게 뷰포트 정중앙 고정
+            tooltip.style.position = 'fixed';
+            tooltip.style.left = '50%';
+            tooltip.style.top = '50%';
+            tooltip.style.transform = 'translate(-50%, -50%)';
+            tooltip.style.width = `${Math.min(290, window.innerWidth * 0.85)}px`;
+        }
     }
+
     function moveTooltip(e) {
+        // 모바일 정중앙 고정 상태(transform이 이미 잡힌 경우)이면 마우스 이동 연산 스킵
+        if (tooltip.style.position === 'fixed' && tooltip.style.left === '50%') return;
+
         const tw = 264, th = tooltip.offsetHeight || 120;
         let x = e.clientX + 14, y = e.clientY - th / 2;
         if (x + tw > window.innerWidth) x = e.clientX - tw - 14;
-        if (y < 8) y = 8;
-        if (y + th > window.innerHeight) y = window.innerHeight - th - 8;
+        if (y < 10) y = 10;
+        if (y + th > window.innerHeight) y = window.innerHeight - th - 10;
+
         tooltip.style.left = `${x}px`;
-        tooltip.style.top  = `${y}px`;
+        tooltip.style.top = `${y}px`;
     }
-    function hideTooltip() { tooltip.style.display = 'none'; }
+
+    function hideTooltip() {
+        tooltip.style.display = 'none';
+        tooltip.innerHTML = '';
+        // 툴팁이 닫힐 때는 스타일 초기화
+        tooltip.style.position = '';
+        tooltip.style.left = '';
+        tooltip.style.top = '';
+        tooltip.style.transform = '';
+        tooltip.style.width = '';
+        delete tooltip.dataset.owner;
+    }
 
     const modal = document.createElement('div');
     modal.id = 'steam-rating-modal';
@@ -748,8 +775,8 @@
         return !!el.closest('.rank-novel-cover, .novel-cover, .cover-img, .ep-thumb, .cover_img, .novel-img');
     }
 
-// -------------------------------------------------------------------------
-    // 모바일 터치 (Long Press) 및 정중앙 배치 제어 처리부 (showTooltip 복구 버전)
+    // -------------------------------------------------------------------------
+    // 모바일 터치 (Long Press) 및 분석 이벤트 바인딩 전체
     // -------------------------------------------------------------------------
     let touchTimer = null;
     let isLongPressActive = false;
@@ -760,7 +787,7 @@
     document.addEventListener('touchstart', (e) => {
         if (!isCoverImage(e.target)) return;
 
-        // 새로운 터치 시 기존 툴팁 즉시 닫기
+        // 새로운 터치가 인식되면 열려있던 툴팁 즉시 초기화
         hideTooltip();
 
         const touch = e.touches[0];
@@ -768,14 +795,14 @@
         startTouchY = touch.clientY;
         isLongPressActive = false;
 
-        // 600ms 동안 유지 시 화면 중앙에 모달 팝업
+        // 600ms 동안 유지 시 화면 중앙에 모달 팝업 트리거
         touchTimer = setTimeout(() => {
             isLongPressActive = true;
             triggerAnalysis(e.target);
         }, 600);
     }, { passive: true });
 
-    // 2. 터치 후 이동 감지 (스크롤 시 롱프레스 취소)
+    // 2. 터치 후 이동 감지 (스크롤 하려고 움직이면 롱프레스 취소)
     document.addEventListener('touchmove', (e) => {
         if (touchTimer) {
             const touch = e.touches[0];
@@ -786,7 +813,7 @@
         }
     }, { passive: true });
 
-    // 3. 터치 종료 (롱프레스 발동 시 기본 링크 이동 방지)
+    // 3. 터치 종료 (롱프레스 발동 시 원래 노블피아 링크 이동 방지)
     document.addEventListener('touchend', (e) => {
         if (touchTimer) {
             clearTimeout(touchTimer);
@@ -801,8 +828,11 @@
     async function triggerAnalysis(clickedEl) {
         hideTooltip();
 
-        // 스크롤 위치에 오염되지 않도록 fixed 레이아웃 고정
+        // CSS 클래스 간섭 방지를 위해 fixed 속성 강제 주입
         modal.style.position = 'fixed';
+        modal.style.left = '50%';
+        modal.style.top = '50%';
+        modal.style.transform = 'translate(-50%, -50%)';
         modal.style.width = `${Math.min(390, window.innerWidth * 0.9)}px`;
         modal.style.display = 'block';
 
@@ -865,7 +895,7 @@
             document.getElementById('steam-modal-cycle-val').textContent = `${rd.cycleText} (${rd.cycleScore}점)`;
             document.getElementById('steam-modal-cycle-bar').style.width = `${rd.cycleScore}%`;
 
-            // 데이터셋에 툴팁 데이터 매핑
+            // 데이터셋에 툴팁 데이터 바인딩
             document.getElementById('steam-row-rec').dataset.tip     = rd.recTooltip;
             document.getElementById('steam-row-ret').dataset.tip     = rd.retTooltip;
             document.getElementById('steam-row-hl').dataset.tip      = rd.halfLifeTooltip;
@@ -879,45 +909,36 @@
         }
     }
 
-    // 닫기 버튼 이벤트
+    // 모달 닫기 버튼 이벤트
     document.getElementById('steam-modal-close').addEventListener('click', () => { modal.style.display = 'none'; hideTooltip(); });
 
-    // 5. 모바일 툴팁 대응 (지표 행 터치 시 기존 showTooltip 함수를 호출하여 화면 정중앙 출력)
+    // 5. 모바일 지표 클릭 토글 핸들러 (수정된 showTooltip 정상 호출부)
     ['rec', 'ret', 'hl', 'comment', 'cycle'].forEach(k => {
         const row = document.getElementById(`steam-row-${k}`);
 
         row.addEventListener('click', (e) => {
-            e.stopPropagation(); // 부모 터치 이벤트 전파 방지
+            e.stopPropagation(); // 모달 뒷배경 클릭 버블링 차단
 
-            // 동일한 지표를 다시 클릭했다면 토글 형식으로 닫기
+            // 토글 처리: 열려있는 상태에서 같은 행을 또 클릭하면 닫기
             if (tooltip.style.display === 'block' && tooltip.dataset.owner === k) {
                 hideTooltip();
             } else {
                 const tipContent = row.dataset.tip;
-                if (!tipContent) return; // 분석 대기 중 혹은 값이 없으면 미작동
+                if (!tipContent) return; // 데이터가 아직 채워지지 않았다면 중단
 
                 tooltip.dataset.owner = k;
 
-                // 기존 스크립트에 상단 정의된 상용구 함수인 'showTooltip'을 호출하되,
-                // e(마우스 이벤트) 대신 더미 오브젝트나 null을 넘겨 스크롤 버그가 안 나게 우회하고 컨텐츠를 주입합니다.
-                showTooltip(null, tipContent);
-
-                // showTooltip 실행 후 화면 fixed 정중앙 레이아웃으로 강제 재정렬
-                tooltip.style.position = 'fixed';
-                tooltip.style.left = '50%';
-                tooltip.style.top = '50%';
-                tooltip.style.transform = 'translate(-50%, -50%)';
-                tooltip.style.width = `${Math.min(290, window.innerWidth * 0.85)}px`;
+                // 첫번째 인자로 텍스트를 넘기고, 두번째 인자로 모바일중앙(true) 플래그를 넘겨 활성화
+                showTooltip(tipContent, true);
             }
         });
     });
 
-    // 6. 모달창 및 툴팁 외부 영역 터치 제어 (닫기 라이프사이클)
+    // 6. 툴팁 외부 영역 터치 시 닫기 라이프사이클 처리
     document.addEventListener('touchstart', (e) => {
         if (tooltip.style.display === 'block' && !tooltip.contains(e.target)) {
             hideTooltip();
             e.stopPropagation();
-            return;
         }
     }, { passive: true });
 

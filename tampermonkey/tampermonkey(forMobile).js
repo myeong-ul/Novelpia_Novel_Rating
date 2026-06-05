@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         노벨피아 스팀 스타일 연독/계산기 for Mobile(Steam Novel Rating)
 // @namespace    https://novelpia.com/
-// @version      2.0.0
+// @version      2.0.1
 // @description  노벨피아 소설 표지를 우클릭하면 스팀 스타일의 다차원 평점 및 연독률 지표 모달을 제공합니다.
 // @author       AI Assistant
 // @match        http://*.novelpia.com/*
@@ -35,6 +35,7 @@
             user-select: none;
             box-sizing: border-box;
             animation: steamFadeIn 0.18s ease-out;
+            transform: translateY(-50%) !important;
         }
         @keyframes steamFadeIn {
             from { opacity: 0; transform: translateY(-6px); }
@@ -740,7 +741,7 @@
         return !!el.closest('.rank-novel-cover, .novel-cover, .cover-img, .ep-thumb, .cover_img, .novel-img');
     }
 
-    // -------------------------------------------------------------------------
+// -------------------------------------------------------------------------
     // 모바일 터치 (Long Press) 분석 연동 핵심 처리부
     // -------------------------------------------------------------------------
     let touchTimer = null;
@@ -751,6 +752,9 @@
     // 1. 표지 터치 다운 감지
     document.addEventListener('touchstart', (e) => {
         if (!isCoverImage(e.target)) return;
+
+        // 새로운 터치가 시작되면 기존에 열려있던 툴팁은 즉시 제거
+        hideTooltip();
 
         const touch = e.touches[0];
         startTouchX = touch.clientX;
@@ -786,31 +790,29 @@
         }
     }, { passive: false });
 
-    // 4. 모바일 전용 분석창 정렬 및 계산 처리 함수
+    // 4. 모바일 전용 분석창 정렬 및 계산 처리 함수 (화면 정중앙 배치 버전)
     async function triggerAnalysis(clickedEl, clientX, clientY) {
+        // 모달창이 뜰 때 뜨아 있는 툴팁 잔재물 확실히 제거
         hideTooltip();
 
-        // 화면 하단 잘림을 방지하기 위한 안전 높이 계산 및 뷰포트 배치
+        // 모바일 폭 계산 (최대 390px, 화면의 90%)
         const modalWidth = Math.min(390, window.innerWidth * 0.9);
-        const modalHeight = 440;
 
+        // 화면 정중앙 좌표 계산 (현재 스크롤 위치 반영)
         let left = (window.innerWidth - modalWidth) / 2;
-        let top = clientY + 15;
-
-        if (top + modalHeight > window.innerHeight) {
-            top = clientY - modalHeight - 15;
-        }
-        if (top < 10) top = 10;
+        let top = (window.innerHeight / 2) + window.scrollY;
 
         modal.style.width = `${modalWidth}px`;
         modal.style.left = `${left}px`;
-        modal.style.top = `${top + window.scrollY}px`; // 스크롤 보정 포함
+        modal.style.top = `${top}px`;
+        modal.style.transform = 'translateY(-50%)'; // 세로축 완벽 정렬 보정
         modal.style.display = 'block';
 
         document.getElementById('steam-modal-novel-title').textContent = getCardTitle(clickedEl) || "소설 데이터 전수조사 중...";
         document.getElementById('steam-modal-ep-count').textContent = '';
         document.getElementById('steam-modal-rating-val').textContent = "연결 진행 중...";
-        document.getElementById('steam-modal-rating-val').className = "steam-rating-value";
+        const rValName = document.getElementById('steam-modal-rating-val');
+        if (rValName) rValName.className = "steam-rating-value";
         document.getElementById('steam-modal-sub-text').textContent = "모든 화수의 조회수 데이터를 병렬 로드 중입니다...";
         document.getElementById('steam-modal-rec-label').textContent = '추천비 점수';
 
@@ -845,7 +847,8 @@
             );
 
             document.getElementById('steam-modal-rating-val').textContent = `${rd.rating} (${rd.score}%)`;
-            document.getElementById('steam-modal-rating-val').className = `steam-rating-value ${rd.ratingClass}`;
+            const rVal = document.getElementById('steam-modal-rating-val');
+            if(rVal) rVal.className = `steam-rating-value ${rd.ratingClass}`;
             document.getElementById('steam-modal-sub-text').textContent = rd.subText;
 
             document.getElementById('steam-modal-rec-label').textContent = `추천비 점수${rd.tagLabel}`;
@@ -898,9 +901,9 @@
         });
     });
 
-    // 6. 모달창이나 툴팁 밖의 빈 화면 터치 시 툴팁 및 분석창 외부 닫기 제어
+    // 6. 모달창이나 툴팁 밖의 빈 화면 터치 시 툴팁 외부 닫기 제어
     document.addEventListener('touchstart', (e) => {
-        if (tooltip.style.display === 'block' && !tooltip.contains(e.target)) {
+        if (tooltip.style.display === 'block' && !tooltip.contains(e.target) && !modal.contains(e.target)) {
             hideTooltip();
         }
     }, { passive: true });

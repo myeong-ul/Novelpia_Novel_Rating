@@ -802,6 +802,13 @@
         }, 600);
     }, { passive: true });
 
+    // 모바일 브라우저 자체 롱탭 메뉴가 동시에 나타나 방해하는 현상 방지
+    document.addEventListener('contextmenu', (e) => {
+        if (isCoverImage(e.target)) {
+            e.preventDefault();
+        }
+    });
+
     // 2. 터치 후 이동 감지 (스크롤 하려고 움직이면 롱프레스 취소)
     document.addEventListener('touchmove', (e) => {
         if (touchTimer) {
@@ -910,13 +917,13 @@
     }
 
     // 모달 닫기 버튼 이벤트
-    document.getElementById('steam-modal-close').addEventListener('click', () => { modal.style.display = 'none'; hideTooltip(); });
+    document.getElementById('steam-modal-close').addEventListener('touchend', () => { modal.style.display = 'none'; hideTooltip(); });
 
     // 5. 모바일 지표 클릭 토글 핸들러 (수정된 showTooltip 정상 호출부)
     ['rec', 'ret', 'hl', 'comment', 'cycle'].forEach(k => {
         const row = document.getElementById(`steam-row-${k}`);
 
-        row.addEventListener('click', (e) => {
+        row.addEventListener('touchend', (e) => {
             e.stopPropagation(); // 모달 뒷배경 클릭 버블링 차단
 
             // 토글 처리: 열려있는 상태에서 같은 행을 또 클릭하면 닫기
@@ -942,7 +949,7 @@
         }
     }, { passive: true });
 
-    document.getElementById('steam-modal-settings-btn').addEventListener('click', () => {
+    document.getElementById('steam-modal-settings-btn').addEventListener('touchend', () => {
         const p = document.getElementById('steam-modal-settings');
         p.style.display = p.style.display === 'none' ? 'block' : 'none';
     });

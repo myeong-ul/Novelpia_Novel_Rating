@@ -21,12 +21,12 @@
     const cssStyle = `
         #steam-rating-modal {
             position: fixed !important;
-            z-index: 10000;
+            z-index: 10000 !important;
             left: 50% !important;
             top: 50% !important;
-            transform: translate(-50%, -50%) !important;
-            width: 90%;             /* 모바일 화면 좌우 여백 확보 */
-            max-width: 390px;       /* 최대 크기는 기존 유지 */
+            bottom: auto !important; /* 상단 고정 기준점 활성화 */
+            right: auto !important;
+            transform: translate(-50%, -50%) !important; /* 화면 중앙 정렬 */
             background: linear-gradient(135deg, #1b2838 0%, #171a21 100%);
             border: 1px solid #66c0f4;
             border-radius: 4px;
@@ -37,7 +37,6 @@
             display: none;
             user-select: none;
             box-sizing: border-box;
-            animation: steamFadeIn 0.18s ease-out;
         }
         @keyframes steamFadeIn {
             from { opacity: 0; transform: translateY(-6px); }
@@ -88,23 +87,23 @@
 
         #steam-stat-tooltip {
             position: fixed !important;
-            z-index: 10001; /* 모달보다 위에 위치 */
+            z-index: 10001 !important; /* 모달보다 한 단계 위 */
             left: 50% !important;
             top: 50% !important;
-            transform: translate(-50%, -50%) !important;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.8);
-            background: #0c1820; 
-            border: 1px solid #2a475e; 
+            bottom: auto !important;
+            right: auto !important;
+            transform: translate(-50%, -50%) !important; /* 툴팁도 완벽한 정중앙 고정 */
+            background: #0c1820;
+            border: 1px solid #2a475e;
             border-radius: 4px;
-            padding: 10px 13px; 
-            font-size: 11px; 
+            padding: 10px 13px;
+            font-size: 11px;
             color: #c7d5e0;
-            line-height: 1.7; 
-            width: 85%;             /* 모바일 대응 */
-            max-width: 260px; 
-            pointer-events: none; 
-            display: none; 
-            white-space: pre-line; 
+            line-height: 1.7;
+            pointer-events: none;
+            display: none;
+            white-space: pre-line;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.8);
         }
         #steam-stat-tooltip .tip-header { font-weight: bold; color: #66c0f4; font-size: 11px; border-bottom: 1px solid #1e3245; padding-bottom: 4px; margin-bottom: 5px; }
         #steam-stat-tooltip .tip-sep { color: #2a475e; }
@@ -795,15 +794,12 @@
         }
     }, { passive: false });
 
-    // 4. 모바일 전용 분석창 화면 정중앙 고정 기능
+    // 4. 모바일 전용 분석창 정중앙 고정 기능 (스크롤 버그 완전 수정)
     async function triggerAnalysis(clickedEl) {
         hideTooltip();
 
-        // 뷰포트 기반 정중앙 고정 스타일 강제 주입
+        // 스크롤 위치에 영항받지 않도록 인라인 스타일 최소화 (CSS에서 처리하도록 유도)
         modal.style.position = 'fixed';
-        modal.style.left = '50%';
-        modal.style.top = '50%';
-        modal.style.transform = 'translate(-50%, -50%)'; // 가로세로 정중앙 정렬
         modal.style.width = `${Math.min(390, window.innerWidth * 0.9)}px`;
         modal.style.display = 'block';
 
@@ -882,7 +878,7 @@
     // 닫기 버튼 이벤트
     document.getElementById('steam-modal-close').addEventListener('click', () => { modal.style.display = 'none'; hideTooltip(); });
 
-    // 5. 모바일 툴팁 대응 (터치 시 화면 정중앙에 모달 위로 배치)
+    // 5. 모바일 툴팁 대응 (터치 시 화면 정중앙 고정)
     ['rec', 'ret', 'hl', 'comment', 'cycle'].forEach(k => {
         const row = document.getElementById(`steam-row-${k}`);
 
@@ -894,15 +890,10 @@
             } else {
                 tooltip.dataset.owner = k;
 
-                // 툴팁 컨텐츠 주입 및 강제 출력
                 tooltip.innerHTML = row.dataset.tip || '';
                 if(!row.dataset.tip) return;
 
-                // 툴팁도 화면 정중앙 고정 형식으로 정렬 위치 세팅
                 tooltip.style.position = 'fixed';
-                tooltip.style.left = '50%';
-                tooltip.style.top = '50%';
-                tooltip.style.transform = 'translate(-50%, -50%)';
                 tooltip.style.width = `${Math.min(280, window.innerWidth * 0.85)}px`;
                 tooltip.style.display = 'block';
             }

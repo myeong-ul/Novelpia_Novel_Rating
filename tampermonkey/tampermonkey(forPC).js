@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         노벨피아 스팀 스타일 연독/계산기 (Steam Novel Rating)
+// @name         노벨피아 스팀 스타일 연독/계산기(Steam Novel Rating)
 // @namespace    https://novelpia.com/
-// @version      1.9.1
+// @version      2.0.0
 // @description  노벨피아 소설 표지를 우클릭하면 스팀 스타일의 다차원 평점 및 연독률 지표 모달을 제공합니다.
 // @author       AI Assistant
 // @match        http://*.novelpia.com/*
@@ -10,13 +10,15 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @run-at       document-end
-// ==/UserScript==
+// ==UserScript==
 
 (async function() {
     'use strict';
 
-    // ── 1. CSS 리소스 주입 (GM_addStyle 활용) ──
-    GM_addStyle(`
+    // =========================================================================
+    // 1. CSS 스타일 정의 (styles.css 통합)
+    // =========================================================================
+    const cssStyle = `
         #steam-rating-modal {
             position: fixed;
             z-index: 10000;
@@ -78,6 +80,7 @@
         .bar-ret     { background: linear-gradient(90deg, #7a3fa6, #c47e00); }
         .bar-comment { background: linear-gradient(90deg, #1e8a4a, #2ecc71); }
         .bar-cycle   { background: linear-gradient(90deg, #c04a00, #f39c12); }
+        .bar-hl { background: linear-gradient(90deg, #116773, #179cb0); }
 
         #steam-stat-tooltip {
             position: fixed; z-index: 10001; background: #0c1820; border: 1px solid #2a475e; border-radius: 4px;
@@ -87,9 +90,15 @@
         #steam-stat-tooltip .tip-header { font-weight: bold; color: #66c0f4; font-size: 11px; border-bottom: 1px solid #1e3245; padding-bottom: 4px; margin-bottom: 5px; }
         #steam-stat-tooltip .tip-sep { color: #2a475e; }
         .steam-tip { font-size: 10px; color: #3d5566; margin-top: 14px; line-height: 1.5; border-top: 1px dashed #1e3245; padding-top: 10px; }
-    `);
+    `;
+    const styleNode = document.createElement('style');
+    styleNode.textContent = cssStyle;
+    document.head.appendChild(styleNode);
 
-    // ── 2. 스팀 스타일 연독/계산 알고리즘 엔진 (v1.9.1) ──
+
+    // =========================================================================
+    // 2. 스팀 스타일 핵심 연독/계산 엔진 (engine.js 통합)
+    // =========================================================================
     const Engine = {
         fmt(n) { return Number(n).toLocaleString('ko-KR'); },
 
@@ -141,15 +150,15 @@
             if (views < 1000) {
                 return {
                     rating: "평가 부족", ratingClass: "steam-color-mixed", score: 0,
-                    recScore: 0, retScore: 0, commentScore: 0, cycleScore: 0, tagLabel: "",
+                    recScore: 0, retScore: 0, commentScore: 0, cycleScore: 0, halfLifeScore: 0, tagLabel: "",
                     recRatioText: "0.0%", retentionRateText: "평가 부족 (조회수 1천 미만)",
-                    commentText: "-", cycleText: "-",
+                    commentText: "-", cycleText: "-", halfLifeText: "-",
                     subText: "조회수가 1,000 이상인 작품만 평가 시스템이 동작합니다.",
-                    recTooltip: "", retTooltip: "", commentTooltip: "", cycleTooltip: ""
+                    recTooltip: "", retTooltip: "", commentTooltip: "", cycleTooltip: "", halfLifeTooltip: ""
                 };
             }
 
-            // ── 추천비 점수 계산 ──
+            // ── 1. 추천비 점수 계산 ──
             const recRatio = recs / views;
             let tagMultiplier = 1.0;
             if (settings.tagAdjustEnabled) {
@@ -167,35 +176,26 @@
                 `(추천 ${this.fmt(recs)} / 조회 ${this.fmt(views)})\n` +
                 `계산 점수: ${recScore}점`;
 
-            // ── 연독률 및 연재 주기 분석 ──
+            // ── 2. 전수조사 기반 데이터 수집 및 분석 ──
             let retScore = 70, retentionRateText = "계산 불가", retTooltip = '';
             let cycleScore = 100, cycleText = "분석 불가", cycleTooltip = '';
+            let halfLifeScore = 50, halfLifeText = "데이터 부족", halfLifeTooltip = '';
 
             if (episodes > 1 && novelId) {
                 try {
-                    let v4 = 0, vMidPrev = 0, vMid = 0, vEndPrev = 0, vEnd = 0;
+                    const totalPagesCount = Math.ceil(episodes / 20);
+                    const allPageIndices = Array.from({ length: totalPagesCount }, (_, i) => i);
 
-                    const epMid = Math.floor(episodes / 2);
-                    const epMidPrev = Math.max(1, epMid - 20);
-                    const epEnd = Math.max(1, episodes - 2);
-                    const epEndPrev = Math.max(1, epEnd - 20);
-
-                    const lastPageIndex = Math.floor((episodes - 1) / 20);
-                    const targetPages = [...new Set([
-                        0,
-                        Math.floor((epMidPrev - 1) / 20),
-                        Math.floor((epMid - 1) / 20),
-                        Math.floor((epEndPrev - 1) / 20),
-                        Math.floor((epEnd - 1) / 20),
-                        lastPageIndex
-                    ])];
+                    const pagesHtmlArray = await Promise.all(
+                        allPageIndices.map(pg => this.postForm("/proc/episode_list", { "novel_no": novelId, "sort": "0", "page": pg.toString() }))
+                    );
 
                     const rawEpisodesMap = {};
                     const latestEpDates = [];
                     let rawDateTexts = [];
+                    const lastPageIndex = totalPagesCount - 1;
 
-                    for (const pg of targetPages) {
-                        const htmlPg = await this.postForm("/proc/episode_list", { "novel_no": novelId, "sort": "0", "page": pg.toString() });
+                    pagesHtmlArray.forEach((htmlPg, pgIndex) => {
                         const divPg = document.createElement('div');
                         divPg.innerHTML = htmlPg;
 
@@ -210,12 +210,10 @@
                             const realEpIndex = parseInt(epMatch[1]);
                             rawEpisodesMap[realEpIndex] = epCode.trim();
 
-                            if (pg === lastPageIndex) {
+                            if (pgIndex === lastPageIndex) {
                                 const dateEl = row.querySelector('.ep_style2 b:not([class*="plus"]), td.ep_style2, .date, .ep_date, td[width="12%"], td:nth-child(4)');
-
                                 if (dateEl) {
                                     let txt = dateEl.textContent.trim();
-
                                     if (txt.includes('PLUS') || txt.includes('궤도')) {
                                         const siblingTd = row.querySelectorAll('td');
                                         siblingTd.forEach(td => {
@@ -225,50 +223,91 @@
                                             }
                                         });
                                     }
-
                                     if(txt) rawDateTexts.push(txt.replace(/\s+/g, ' '));
                                     const d = this.parseDate(txt);
                                     if (d) latestEpDates.push(d);
                                 }
                             }
                         });
-                    }
+                    });
 
-                    // 연독률 계산부
-                    const targetIndices = [4, epMidPrev, epMid, epEndPrev, epEnd];
-                    const codeListToFetch = targetIndices.map(i => rawEpisodesMap[i]).filter(Boolean);
+                    const allCollectedIndices = Object.keys(rawEpisodesMap).map(Number).sort((a,b) => a - b);
+                    const codeListToFetch = allCollectedIndices.map(i => rawEpisodesMap[i]).filter(Boolean);
+                    const allViewsMap = {};
 
                     if (codeListToFetch.length > 0) {
-                        const vrRaw = await this.postForm("/proc/novel", { "cmd": "get_episode_count_view", "episode_arr": codeListToFetch, "novel_no": novelId });
-                        const vrData = JSON.parse(vrRaw);
+                        const chunkSize = 100;
+                        const mergedList = [];
 
-                        if (vrData?.list?.length > 0) {
-                            const viewsByCode = {};
-                            vrData.list.forEach(v => {
-                                viewsByCode[v.episode_no] = parseInt(v.count_view.replace(/,/g, '')) || 0;
+                        for (let i = 0; i < codeListToFetch.length; i += chunkSize) {
+                            const chunk = codeListToFetch.slice(i, i + chunkSize);
+                            try {
+                                const vrRaw = await this.postForm("/proc/novel", {
+                                    "cmd": "get_episode_count_view",
+                                    "episode_arr": chunk,
+                                    "novel_no": novelId
+                                });
+
+                                if (vrRaw.trim().startsWith("<")) {
+                                    console.warn(`[SteamNovel] ${i}번째 청크에서 서버 에러가 응답되어 스킵되었습니다.`);
+                                    continue;
+                                }
+
+                                const vrData = JSON.parse(vrRaw);
+                                if (vrData?.list?.length > 0) {
+                                    mergedList.push(...vrData.list);
+                                }
+                            } catch (chunkErr) {
+                                console.error("[SteamNovel] 분할 조회수 로드 실패:", chunkErr);
+                            }
+                        }
+
+                        if (mergedList.length > 0) {
+                            const codeToEpIndex = {};
+                            Object.entries(rawEpisodesMap).forEach(([epIdx, code]) => {
+                                codeToEpIndex[code] = parseInt(epIdx);
                             });
-                            v4 = viewsByCode[rawEpisodesMap[4]] || 0;
-                            vMidPrev = viewsByCode[rawEpisodesMap[epMidPrev]] || 0;
-                            vMid = viewsByCode[rawEpisodesMap[epMid]] || 0;
-                            vEndPrev = viewsByCode[rawEpisodesMap[epEndPrev]] || 0;
-                            vEnd = viewsByCode[rawEpisodesMap[epEnd]] || 0;
+
+                            mergedList.forEach(v => {
+                                const epIdx = codeToEpIndex[v.episode_no];
+                                if (epIdx) {
+                                    allViewsMap[epIdx] = parseInt(v.count_view.replace(/,/g, '')) || 0;
+                                }
+                            });
                         }
                     }
 
-                    if (episodes >= 40 && vMidPrev > 0 && vEndPrev > 0 && v4 > 0) {
+                    const v1 = allViewsMap[1] || 0;
+                    const v4 = allViewsMap[4] || 0;
+                    const rawRange = Math.round(episodes * 0.2);
+                    const windowSize = Math.max(20, Math.min(40, rawRange));
+
+                    const epEnd = Math.max(1, episodes - 2);
+                    const epEndPrev = Math.max(1, epEnd - windowSize);
+                    const epMid = Math.floor(episodes / 2);
+                    const epMidPrev = Math.max(1, epMid - windowSize);
+
+                    const vMidPrev = allViewsMap[epMidPrev] || 0;
+                    const vMid = allViewsMap[epMid] || 0;
+                    const vEndPrev = allViewsMap[epEndPrev] || 0;
+                    const vEnd = allViewsMap[epEnd] || 0;
+
+                    if (episodes >= (windowSize + 5) && vMidPrev > 0 && vEndPrev > 0 && v4 > 0) {
                         const midRetention = vMid / vMidPrev;
                         const endRetention = vEnd / vEndPrev;
                         const totalRetention = vEnd / v4;
 
                         const scoreMid = Math.min(100, Math.round(midRetention * 100));
                         const scoreEnd = Math.min(100, Math.round(endRetention * 100));
-                        const scoreTotal = episodes >= 80 ? Math.min(100, Math.round(totalRetention * 100 * 2.5)) : Math.min(100, Math.round(totalRetention * 100 * 1.2));
+                        const scoreTotal = episodes >= 80 ? Math.min(100, Math.round(totalRetention * 100 * 2.2)) : Math.min(100, Math.round(totalRetention * 100 * 1.2));
 
                         retScore = Math.max(0, Math.min(100, Math.round((scoreMid * 0.3) + (scoreEnd * 0.5) + (scoreTotal * 0.2))));
-                        retentionRateText = `최근 유지력: ${(endRetention * 100).toFixed(1)}%`;
-                        retTooltip = `<div class="tip-header">📈 중/장편 구간 연독률</div>허리 연독: ${(midRetention * 100).toFixed(1)}%\n후반 유지: ${(endRetention * 100).toFixed(1)}%\n초반 대비 생존: ${(totalRetention * 100).toFixed(1)}%` +
-                            `\n<span class="tip-sep">─────────────────────</span>\n` +
-                            `가중치 반영: 허리 30% + 후반 50% + 전체 20%\n` +
+                        retentionRateText = `최근 유지력: ${(endRetention * 100).toFixed(1)}% (${windowSize}화 기준)`;
+                        retTooltip = `<div class="tip-header">📈 중/장편 구간 연독률 (${windowSize}화 변동 구간)</div>` +
+                            `• 허리구간 연독 (${epMidPrev}화➔${epMid}화): ${(midRetention * 100).toFixed(1)}%\n` +
+                            `• 후반구간 연독 (${epEndPrev}화➔${epEnd}화): ${(endRetention * 100).toFixed(1)}%\n` +
+                            `• 초반 대비 생존 (4화➔최신): ${(totalRetention * 100).toFixed(1)}%\n` +
+                            `<span class="tip-sep">─────────────────────</span>\n` +
                             `최종 연독 점수: ${retScore}점`;
                     } else if (v4 > 0 && vEnd > 0) {
                         const simpleRatio = vEnd / v4;
@@ -280,7 +319,74 @@
                         retTooltip = `<div class="tip-header">📈 연독률 분석 실패</div>`;
                     }
 
-                    // 연재 주기 판단부
+                    if (v1 > 0 && v4 > 0) {
+                        let hl1 = "유지됨", hl1Ep = episodes;
+                        let hl4 = "유지됨", hl4Ep = episodes;
+
+                        for (let i = 1; i <= episodes; i++) {
+                            const currentView = allViewsMap[i];
+                            if (currentView && currentView <= v1 * 0.5) {
+                                hl1 = `${i}화`;
+                                hl1Ep = i;
+                                break;
+                            }
+                        }
+
+                        for (let i = 4; i <= episodes; i++) {
+                            const currentView = allViewsMap[i];
+                            if (currentView && currentView <= v4 * 0.5) {
+                                const diff = i - 4;
+                                hl4 = `+${diff}화 뒤 (${i}화)`;
+                                hl4Ep = diff;
+                                break;
+                            }
+                        }
+
+                        const getHl1Score = (ep) => {
+                            if (ep === "유지됨" || ep > 30) {
+                                if (ep === "유지됨") return 100;
+                                const extra = Math.min(19, Math.round(((ep - 30) / Math.max(1, episodes - 30)) * 19));
+                                return 81 + extra;
+                            }
+                            if (ep <= 4) return Math.round(10 + (ep / 4) * 20);
+                            if (ep <= 15) {
+                                const pct = (ep - 4) / (15 - 4);
+                                return Math.round(31 + pct * 29);
+                            }
+                            const pct = (ep - 15) / (30 - 15);
+                            return Math.round(61 + pct * 19);
+                        };
+
+                        const getHl4Score = (diff) => {
+                            if (diff === "유지됨" || diff > 26) return 100;
+                            if (diff <= 1) return 15;
+                            if (diff <= 11) {
+                                const pct = (diff - 1) / (11 - 1);
+                                return Math.round(35 + pct * 25);
+                            }
+                            const pct = (diff - 11) / (26 - 11);
+                            return Math.round(61 + pct * 20);
+                        };
+
+                        const sHl1 = hl1 === "유지됨" ? 100 : getHl1Score(hl1Ep);
+                        const sHl4 = hl4 === "유지됨" ? 100 : getHl4Score(hl4Ep);
+
+                        halfLifeScore = Math.round(sHl1 * 0.4 + sHl4 * 0.6);
+                        halfLifeText = `1화기준: ${hl1} / 4화기준: ${hl4}`;
+
+                        halfLifeTooltip = `<div class="tip-header">📉 독자 유지력 (절대 기준 반감기 평가)</div>` +
+                            `• 1화 조회수 절반 (${this.fmt(Math.round(v1 * 0.5))}회) 이하 지점:\n  ➔ <span style="color:#ff6b6b;font-weight:bold">${hl1}</span> (구간 점수: ${sHl1}점)\n` +
+                            `• 4화 조회수 절반 (${this.fmt(Math.round(v4 * 0.5))}회) 이하 지점:\n  ➔ <span style="color:#ff6b6b;font-weight:bold">${hl4}</span> (구간 점수: ${sHl4}점)\n` +
+                            `<span class="tip-sep">─────────────────────</span>\n` +
+                            `💡 <b>밸런스 패치 판정 지표:</b>\n` +
+                            `  - 4화 이하 반감: 망작 (10~30점)\n` +
+                            `  - 15화 이하 반감: 소재 반짝 (31~60점)\n` +
+                            `  - 30화 이하 반감: 무난한 평작 (61~80점)\n` +
+                            `  - 30화 초과 유지: 웰메이드 (81~100점)\n` +
+                            `<span class="tip-sep">─────────────────────</span>\n` +
+                            `• 최종 유지력 점수: ${halfLifeScore}점`;
+                    }
+
                     if (_isComplete) {
                         cycleText = "완결 소설";
                         cycleScore = 100;
@@ -327,14 +433,12 @@
                 cycleScore = 100;
             }
 
-            // ── 3. 베댓 상호작용 점수 ──
             let commentScore = 50, sumLikes = 0, commentText = "댓글 없음", commentTooltip = '';
             if (commentRows?.length > 0) {
                 const likes = [];
-                const processedId = new Set(); // 중복 파싱 방지 보틀넥 필터
+                const processedId = new Set();
 
                 commentRows.forEach(el => {
-                    // 대댓글(답글)이거나 이미 처리한 댓글 아이디 패스
                     if (el.classList.contains('comment_re')) return;
                     const cId = el.getAttribute('id') || el.dataset.id;
                     if (cId && processedId.has(cId)) return;
@@ -345,11 +449,9 @@
                 });
 
                 if (likes.length > 0) {
-                    // 가장 추천이 많은 상위 베댓 정렬
                     likes.sort((a, b) => b - a);
                     sumLikes = likes.slice(0, 3).reduce((a, b) => a + b, 0);
 
-                    // 추천순 강제 정렬 피드백 반영 점수 스케일링 보정
                     const sAbs = Math.min(100, (sumLikes / 600) * 100);
                     const sRel = Math.min(100, ((sumLikes / Math.max(100, views / Math.max(1, episodes))) / 0.06) * 100);
 
@@ -363,7 +465,8 @@
                 }
             }
 
-            const overall = Math.round(recScore * 0.3 + retScore * 0.3 + commentScore * 0.2 + cycleScore * 0.2);
+            const overall = Math.round(recScore * 0.25 + retScore * 0.25 + commentScore * 0.15 + cycleScore * 0.15 + halfLifeScore * 0.20);
+
             let rating = "복합적", rClass = "steam-color-mixed";
             if (overall >= 90) { rating = "압도적으로 긍정적"; rClass = "steam-color-positive"; }
             else if (overall >= 80) { rating = "매우 긍정적"; rClass = "steam-color-positive"; }
@@ -372,23 +475,25 @@
             else                     { rating = "대체로 애매함"; rClass = "steam-color-negative"; }
 
             return {
-                rating, ratingClass: rClass, score: overall, recScore, retScore, commentScore, cycleScore, tagLabel,
-                recRatioText: (recRatio * 100).toFixed(2) + "%", retentionRateText, commentText, cycleText,
+                rating, ratingClass: rClass, score: overall, recScore, retScore, commentScore, cycleScore, halfLifeScore, tagLabel,
+                recRatioText: (recRatio * 100).toFixed(2) + "%", retentionRateText, commentText, cycleText, halfLifeText,
                 subText: `전체 조회수 ${views >= 10000 ? (views/10000).toFixed(1)+'만':this.fmt(views)}회 중 추천 ${this.fmt(recs)}개`,
-                recTooltip, retTooltip, commentTooltip, cycleTooltip
+                recTooltip, retTooltip, commentTooltip, cycleTooltip, halfLifeTooltip
             };
         }
     };
 
-    // ── 3. 확장 라이프사이클 컨텍스트 바인딩 및 마이그레이션 ──
 
-    // Tampermonkey 스토리지 동기화 세팅 치환 (GM_getValue 사용)
+    // =========================================================================
+    // 3. 라이프사이클 컨텍스트 바인딩 및 이벤트 처리 (content.js 통합 및 변환)
+    // =========================================================================
+
+    // Tampermonkey GM 스토리지 기반으로 설정 연동
     let settings = {
         closeOnScroll: GM_getValue('closeOnScroll', true),
         tagAdjustEnabled: GM_getValue('tagAdjustEnabled', true)
     };
 
-    // 툴팁 DOM 동적 선언
     const tooltip = document.createElement('div');
     tooltip.id = 'steam-stat-tooltip';
     document.body.appendChild(tooltip);
@@ -410,7 +515,6 @@
     }
     function hideTooltip() { tooltip.style.display = 'none'; }
 
-    // 메인 UI 모달 구현
     const modal = document.createElement('div');
     modal.id = 'steam-rating-modal';
     modal.innerHTML = `
@@ -457,11 +561,20 @@
             </div>
             <div class="steam-stat-row" id="steam-row-ret">
                 <div class="stat-meta">
-                    <span class="stat-label">연독률 (인기도 보정)</span>
+                    <span class="stat-label">연독률 (중장편 구간 보정)</span>
                     <span class="stat-value" id="steam-modal-ret-val">-</span>
                 </div>
                 <div class="stat-bar-container">
                     <div class="stat-bar bar-ret" id="steam-modal-ret-bar" style="width:0%"></div>
+                </div>
+            </div>
+            <div class="steam-stat-row" id="steam-row-hl">
+                <div class="stat-meta">
+                    <span class="stat-label">독자 유지력 (실제 반감 화수)</span>
+                    <span class="stat-value" id="steam-modal-hl-val">-</span>
+                </div>
+                <div class="stat-bar-container">
+                    <div class="stat-bar bar-hl" id="steam-modal-hl-bar" style="width:0%"></div>
                 </div>
             </div>
             <div class="steam-stat-row" id="steam-row-comment">
@@ -484,13 +597,13 @@
             </div>
         </div>
         <div class="steam-tip">
-            ⚠️ 이 평가는 제공된 지표를 통한 예측 분석 결과로, 절대적인 기준이 아닙니다.<br>
+            ⚠️ 이 평가는 전수 조사 데이터를 통한 매핑 결과로, 절대적인 기준이 아닙니다.<br>
             💡 더블 우클릭하면 브라우저 기본 우클릭 메뉴가 열립니다.
         </div>
     `;
     document.body.appendChild(modal);
 
-    // 초기 토글 스위치 상태 반영
+    // 초기 체크박스 상태 동기화
     document.getElementById('setting-close-on-scroll').checked = settings.closeOnScroll;
     document.getElementById('setting-tag-adjust').checked = settings.tagAdjustEnabled;
 
@@ -591,23 +704,13 @@
 
         let commentRows = [];
         try {
-            // [해결책]: 현재 브라우저의 원래 댓글 정렬 설정을 백업합니다.
             const originalSortCookie = document.cookie.match(/(?:^|; )COMMENT_SORT=([^;]*)/)?.[1] || '';
-
-            // 노벨피아 서버가 추천순을 강제 인식하도록 브라우저 쿠키를 'vote'로 임시 변경합니다.
             document.cookie = "COMMENT_SORT=vote; path=/; domain=.novelpia.com; max-age=5;";
-
-            // API 호출 (FormData 형식과 쿼리 스트링 두 영역 모두에 안전하게 정렬 세팅 반영)
             const ch = await postForm(`/proc/novel_comment/${novelId}?page=1&sort=vote`, { sort: "vote" });
-
-            // 데이터를 안전하게 파싱합니다.
             commentRows = Array.from(new DOMParser().parseFromString(ch, 'text/html').querySelectorAll('._comment_flag'));
-
-            // [복구]: 분석 요청이 끝난 즉시 유저가 원래 사용하던 댓글 정렬 상태로 원래대로 되돌립니다.
             if (originalSortCookie) {
                 document.cookie = `COMMENT_SORT=${originalSortCookie}; path=/; domain=.novelpia.com;`;
             } else {
-                // 기존 쿠키가 없었다면 임시 쿠키를 만료시켜 삭제합니다.
                 document.cookie = "COMMENT_SORT=; path=/; domain=.novelpia.com; max-age=0;";
             }
         } catch(e) {
@@ -633,19 +736,20 @@
             modal.style.display = 'none'; hideTooltip();
         } else {
             e.preventDefault();
-            const mw = 390, mh = 420;
+            const mw = 390, mh = 450;
             let left = e.clientX + 10, top = e.clientY + 10;
             if (left + mw > window.innerWidth) left = e.clientX - mw - 10;
             if (top + mh > window.innerHeight) top = e.clientY - mh - 10;
             modal.style.left = `${left}px`; modal.style.top = `${top}px`; modal.style.display = 'block';
 
-            document.getElementById('steam-modal-novel-title').textContent = getCardTitle(clickedEl) || "소설 데이터 분석 중...";
+            document.getElementById('steam-modal-novel-title').textContent = getCardTitle(clickedEl) || "소설 데이터 전수조사 중...";
             document.getElementById('steam-modal-ep-count').textContent = '';
             document.getElementById('steam-modal-rating-val').textContent = "연결 진행 중...";
             document.getElementById('steam-modal-rating-val').className = "steam-rating-value";
-            document.getElementById('steam-modal-sub-text').textContent = "노벨피아 데이터를 로드 중입니다...";
+            document.getElementById('steam-modal-sub-text').textContent = "모든 화수의 조회수 데이터를 병렬 로드 중입니다...";
             document.getElementById('steam-modal-rec-label').textContent = '추천비 점수';
-            ['rec', 'ret', 'comment', 'cycle'].forEach(k => {
+
+            ['rec', 'ret', 'hl', 'comment', 'cycle'].forEach(k => {
                 document.getElementById(`steam-modal-${k}-val`).textContent = "-";
                 document.getElementById(`steam-modal-${k}-bar`).style.width = "0%";
                 document.getElementById(`steam-row-${k}`).dataset.tip = '';
@@ -686,6 +790,9 @@
                 document.getElementById('steam-modal-ret-val').textContent = `${rd.retentionRateText} (${rd.retScore}점)`;
                 document.getElementById('steam-modal-ret-bar').style.width = `${rd.retScore}%`;
 
+                document.getElementById('steam-modal-hl-val').textContent = `${rd.halfLifeText} (${rd.halfLifeScore}점)`;
+                document.getElementById('steam-modal-hl-bar').style.width = `${rd.halfLifeScore}%`;
+
                 document.getElementById('steam-modal-comment-val').textContent = `${rd.commentText} (${rd.commentScore}점)`;
                 document.getElementById('steam-modal-comment-bar').style.width = `${rd.commentScore}%`;
 
@@ -694,6 +801,7 @@
 
                 document.getElementById('steam-row-rec').dataset.tip     = rd.recTooltip;
                 document.getElementById('steam-row-ret').dataset.tip     = rd.retTooltip;
+                document.getElementById('steam-row-hl').dataset.tip      = rd.halfLifeTooltip;
                 document.getElementById('steam-row-comment').dataset.tip = rd.commentTooltip;
                 document.getElementById('steam-row-cycle').dataset.tip   = rd.cycleTooltip;
 
@@ -707,7 +815,8 @@
     });
 
     document.getElementById('steam-modal-close').addEventListener('click', () => { modal.style.display = 'none'; hideTooltip(); });
-    ['rec', 'ret', 'comment', 'cycle'].forEach(k => {
+
+    ['rec', 'ret', 'hl', 'comment', 'cycle'].forEach(k => {
         const row = document.getElementById(`steam-row-${k}`);
         row.addEventListener('mouseenter', (e) => showTooltip(e, row.dataset.tip));
         row.addEventListener('mousemove', moveTooltip);
@@ -718,7 +827,7 @@
         p.style.display = p.style.display === 'none' ? 'block' : 'none';
     });
 
-    // Tampermonkey 스토리지 세이브 치환 (GM_setValue 사용)
+    // 설정 값 변경 시 GM_setValue로 영구 저장
     document.getElementById('setting-close-on-scroll').addEventListener('change', (e) => {
         settings.closeOnScroll = e.target.checked;
         GM_setValue('closeOnScroll', settings.closeOnScroll);

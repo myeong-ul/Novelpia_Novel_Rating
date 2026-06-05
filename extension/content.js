@@ -215,9 +215,28 @@
 
         let commentRows = [];
         try {
-            const ch = await postForm(`/proc/novel_comment/${novelId}?page=1`, {});
+            // [해결책]: 현재 브라우저의 원래 댓글 정렬 설정을 백업합니다.
+            const originalSortCookie = document.cookie.match(/(?:^|; )COMMENT_SORT=([^;]*)/)?.[1] || '';
+
+            // 노벨피아 서버가 추천순을 강제 인식하도록 브라우저 쿠키를 'vote'로 임시 변경합니다.
+            document.cookie = "COMMENT_SORT=vote; path=/; domain=.novelpia.com; max-age=5;";
+
+            // API 호출 (FormData 형식과 쿼리 스트링 두 영역 모두에 안전하게 정렬 세팅 반영)
+            const ch = await postForm(`/proc/novel_comment/${novelId}?page=1&sort=vote`, { sort: "vote" });
+
+            // 데이터를 안전하게 파싱합니다.
             commentRows = Array.from(new DOMParser().parseFromString(ch, 'text/html').querySelectorAll('._comment_flag'));
-        } catch(e) {}
+
+            // [복구]: 분석 요청이 끝난 즉시 유저가 원래 사용하던 댓글 정렬 상태로 원래대로 되돌립니다.
+            if (originalSortCookie) {
+                document.cookie = `COMMENT_SORT=${originalSortCookie}; path=/; domain=.novelpia.com;`;
+            } else {
+                // 기존 쿠키가 없었다면 임시 쿠키를 만료시켜 삭제합니다.
+                document.cookie = "COMMENT_SORT=; path=/; domain=.novelpia.com; max-age=0;";
+            }
+        } catch(e) {
+            console.error("[SteamNovel] 댓글 수집 실패:", e);
+        }
 
         return { stats, commentRows, novelTitle, isComplete, isAdult, hasTS };
     }

@@ -20,8 +20,11 @@
     // =========================================================================
     const cssStyle = `
         #steam-rating-modal {
-            position: fixed;
+            position: fixed !important;
             z-index: 10000;
+            left: 50% !important;
+            top: 50% !important;
+            transform: translate(-50%, -50%) !important;
             width: 90%;             /* 모바일 화면 좌우 여백 확보 */
             max-width: 390px;       /* 최대 크기는 기존 유지 */
             background: linear-gradient(135deg, #1b2838 0%, #171a21 100%);
@@ -35,7 +38,6 @@
             user-select: none;
             box-sizing: border-box;
             animation: steamFadeIn 0.18s ease-out;
-            transform: translateY(-50%) !important;
         }
         @keyframes steamFadeIn {
             from { opacity: 0; transform: translateY(-6px); }
@@ -85,8 +87,12 @@
         .bar-hl { background: linear-gradient(90deg, #116773, #179cb0); }
 
         #steam-stat-tooltip {
-            position: fixed; 
-            z-index: 10001; 
+            position: fixed !important;
+            z-index: 10001; /* 모달보다 위에 위치 */
+            left: 50% !important;
+            top: 50% !important;
+            transform: translate(-50%, -50%) !important;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.8);
             background: #0c1820; 
             border: 1px solid #2a475e; 
             border-radius: 4px;
@@ -99,7 +105,6 @@
             pointer-events: none; 
             display: none; 
             white-space: pre-line; 
-            box-shadow: 0 4px 16px rgba(0,0,0,0.5);
         }
         #steam-stat-tooltip .tip-header { font-weight: bold; color: #66c0f4; font-size: 11px; border-bottom: 1px solid #1e3245; padding-bottom: 4px; margin-bottom: 5px; }
         #steam-stat-tooltip .tip-sep { color: #2a475e; }
@@ -742,7 +747,7 @@
     }
 
 // -------------------------------------------------------------------------
-    // 모바일 터치 (Long Press) 분석 연동 핵심 처리부
+    // 모바일 터치 (Long Press) 및 정중앙 배치 제어 처리부
     // -------------------------------------------------------------------------
     let touchTimer = null;
     let isLongPressActive = false;
@@ -753,7 +758,7 @@
     document.addEventListener('touchstart', (e) => {
         if (!isCoverImage(e.target)) return;
 
-        // 새로운 터치가 시작되면 기존에 열려있던 툴팁은 즉시 제거
+        // 새로운 터치 시 기존 툴팁 즉시 초기화
         hideTooltip();
 
         const touch = e.touches[0];
@@ -761,14 +766,14 @@
         startTouchY = touch.clientY;
         isLongPressActive = false;
 
-        // 600ms 동안 계속 누르고 있으면 모달창 팝업 트리거
+        // 600ms 동안 유지 시 화면 중앙에 모달 팝업
         touchTimer = setTimeout(() => {
             isLongPressActive = true;
-            triggerAnalysis(e.target, startTouchX, startTouchY);
+            triggerAnalysis(e.target);
         }, 600);
     }, { passive: true });
 
-    // 2. 터치 후 손가락 이동 제어 (스크롤 하려고 문지르면 롱프레스 취소)
+    // 2. 터치 후 이동 감지 (스크롤 시 롱프레스 취소)
     document.addEventListener('touchmove', (e) => {
         if (touchTimer) {
             const touch = e.touches[0];
@@ -779,7 +784,7 @@
         }
     }, { passive: true });
 
-    // 3. 터치 업 제어 (롱프레스가 발동했다면 일반 탭 작동(상세페이지 이동 등) 방지)
+    // 3. 터치 종료 (롱프레스 발동 시 기본 링크 이동 방지)
     document.addEventListener('touchend', (e) => {
         if (touchTimer) {
             clearTimeout(touchTimer);
@@ -790,22 +795,16 @@
         }
     }, { passive: false });
 
-    // 4. 모바일 전용 분석창 정렬 및 계산 처리 함수 (화면 정중앙 배치 버전)
-    async function triggerAnalysis(clickedEl, clientX, clientY) {
-        // 모달창이 뜰 때 뜨아 있는 툴팁 잔재물 확실히 제거
+    // 4. 모바일 전용 분석창 화면 정중앙 고정 기능
+    async function triggerAnalysis(clickedEl) {
         hideTooltip();
 
-        // 모바일 폭 계산 (최대 390px, 화면의 90%)
-        const modalWidth = Math.min(390, window.innerWidth * 0.9);
-
-        // 화면 정중앙 좌표 계산 (현재 스크롤 위치 반영)
-        let left = (window.innerWidth - modalWidth) / 2;
-        let top = (window.innerHeight / 2) + window.scrollY;
-
-        modal.style.width = `${modalWidth}px`;
-        modal.style.left = `${left}px`;
-        modal.style.top = `${top}px`;
-        modal.style.transform = 'translateY(-50%)'; // 세로축 완벽 정렬 보정
+        // 뷰포트 기반 정중앙 고정 스타일 강제 주입
+        modal.style.position = 'fixed';
+        modal.style.left = '50%';
+        modal.style.top = '50%';
+        modal.style.transform = 'translate(-50%, -50%)'; // 가로세로 정중앙 정렬
+        modal.style.width = `${Math.min(390, window.innerWidth * 0.9)}px`;
         modal.style.display = 'block';
 
         document.getElementById('steam-modal-novel-title').textContent = getCardTitle(clickedEl) || "소설 데이터 전수조사 중...";
@@ -883,28 +882,40 @@
     // 닫기 버튼 이벤트
     document.getElementById('steam-modal-close').addEventListener('click', () => { modal.style.display = 'none'; hideTooltip(); });
 
-    // 5. 모바일 툴팁 대응 (터치 클릭 시 열림/닫힘 토글 처리)
+    // 5. 모바일 툴팁 대응 (터치 시 화면 정중앙에 모달 위로 배치)
     ['rec', 'ret', 'hl', 'comment', 'cycle'].forEach(k => {
         const row = document.getElementById(`steam-row-${k}`);
 
         row.addEventListener('click', (e) => {
-            e.stopPropagation(); // 모달 외부 터치 이벤트 전파 방지
+            e.stopPropagation();
 
             if (tooltip.style.display === 'block' && tooltip.dataset.owner === k) {
                 hideTooltip();
             } else {
                 tooltip.dataset.owner = k;
-                // 모달 내부 행의 중앙 위치를 잡아 툴팁 배치
-                const rect = row.getBoundingClientRect();
-                showTooltip(rect.left + (rect.width / 2), rect.top, row.dataset.tip);
+
+                // 툴팁 컨텐츠 주입 및 강제 출력
+                tooltip.innerHTML = row.dataset.tip || '';
+                if(!row.dataset.tip) return;
+
+                // 툴팁도 화면 정중앙 고정 형식으로 정렬 위치 세팅
+                tooltip.style.position = 'fixed';
+                tooltip.style.left = '50%';
+                tooltip.style.top = '50%';
+                tooltip.style.transform = 'translate(-50%, -50%)';
+                tooltip.style.width = `${Math.min(280, window.innerWidth * 0.85)}px`;
+                tooltip.style.display = 'block';
             }
         });
     });
 
-    // 6. 모달창이나 툴팁 밖의 빈 화면 터치 시 툴팁 외부 닫기 제어
+    // 6. 모달창 외부 터치 시 닫기 핸들러
     document.addEventListener('touchstart', (e) => {
-        if (tooltip.style.display === 'block' && !tooltip.contains(e.target) && !modal.contains(e.target)) {
+        // 툴팁 활성화 중일 때 툴팁 영역 외부 터치 시 툴팁만 닫기
+        if (tooltip.style.display === 'block' && !tooltip.contains(e.target)) {
             hideTooltip();
+            e.stopPropagation();
+            return;
         }
     }, { passive: true });
 

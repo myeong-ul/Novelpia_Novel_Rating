@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         노벨피아 스팀 스타일 연독/계산기 (Steam Novel Rating)
+// @name         노벨피아 스팀 스타일 연독/계산기 for Mobile(Steam Novel Rating)
 // @namespace    https://novelpia.com/
 // @version      1.9.1
 // @description  노벨피아 소설 표지를 우클릭하면 스팀 스타일의 다차원 평점 및 연독률 지표 모달을 제공합니다.

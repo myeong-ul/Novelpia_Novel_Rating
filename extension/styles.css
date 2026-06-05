@@ -59,6 +59,7 @@
 .bar-ret     { background: linear-gradient(90deg, #7a3fa6, #c47e00); }
 .bar-comment { background: linear-gradient(90deg, #1e8a4a, #2ecc71); }
 .bar-cycle   { background: linear-gradient(90deg, #c04a00, #f39c12); }
+.bar-hl { background: linear-gradient(90deg, #116773, #179cb0); }
 
 #steam-stat-tooltip {
     position: fixed; z-index: 10001; background: #0c1820; border: 1px solid #2a475e; border-radius: 4px;

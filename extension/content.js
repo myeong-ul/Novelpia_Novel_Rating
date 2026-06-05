@@ -1,21 +1,18 @@
-// 확장 프로그램 라이프사이클 컨텍스트 바인딩 스크립트 (v1.8.8)
+// 확장 프로그램 라이프사이클 컨텍스트 바인딩 스크립트 (v2.0.0)
 (async function() {
     'use strict';
 
-    // CSS 리소스 로드
     const style = document.createElement('link');
     style.rel = 'stylesheet';
     style.href = chrome.runtime.getURL('styles.css');
     (document.head || document.documentElement).appendChild(style);
 
-    // 스토리지 세팅 동기화
     let settings = { closeOnScroll: true, tagAdjustEnabled: true };
     chrome.storage.local.get(['closeOnScroll', 'tagAdjustEnabled'], (res) => {
         if(res.closeOnScroll !== undefined) settings.closeOnScroll = res.closeOnScroll;
         if(res.tagAdjustEnabled !== undefined) settings.tagAdjustEnabled = res.tagAdjustEnabled;
     });
 
-    // 툴팁 DOM 동적 선언
     const tooltip = document.createElement('div');
     tooltip.id = 'steam-stat-tooltip';
     document.body.appendChild(tooltip);
@@ -37,7 +34,6 @@
     }
     function hideTooltip() { tooltip.style.display = 'none'; }
 
-    // 메인 UI 모달 동적 구현 및 바인딩
     const modal = document.createElement('div');
     modal.id = 'steam-rating-modal';
     modal.innerHTML = `
@@ -84,11 +80,20 @@
             </div>
             <div class="steam-stat-row" id="steam-row-ret">
                 <div class="stat-meta">
-                    <span class="stat-label">연독률 (인기도 보정)</span>
+                    <span class="stat-label">연독률 (중장편 구간 보정)</span>
                     <span class="stat-value" id="steam-modal-ret-val">-</span>
                 </div>
                 <div class="stat-bar-container">
                     <div class="stat-bar bar-ret" id="steam-modal-ret-bar" style="width:0%"></div>
+                </div>
+            </div>
+            <div class="steam-stat-row" id="steam-row-hl">
+                <div class="stat-meta">
+                    <span class="stat-label">독자 유지력 (실제 반감 화수)</span>
+                    <span class="stat-value" id="steam-modal-hl-val">-</span>
+                </div>
+                <div class="stat-bar-container">
+                    <div class="stat-bar bar-hl" id="steam-modal-hl-bar" style="width:0%"></div>
                 </div>
             </div>
             <div class="steam-stat-row" id="steam-row-comment">
@@ -111,13 +116,12 @@
             </div>
         </div>
         <div class="steam-tip">
-            ⚠️ 이 평가는 제공된 지표를 통한 예측 분석 결과로, 절대적인 기준이 아닙니다.<br>
+            ⚠️ 이 평가는 전수 조사 데이터를 통한 매핑 결과로, 절대적인 기준이 아닙니다.<br>
             💡 더블 우클릭하면 브라우저 기본 우클릭 메뉴가 열립니다.
         </div>
     `;
     document.body.appendChild(modal);
 
-    // 비동기 통신 추상화 레이어
     async function postForm(url, data) {
         const fd = new FormData();
         for (const k in data) {
@@ -215,23 +219,13 @@
 
         let commentRows = [];
         try {
-            // [해결책]: 현재 브라우저의 원래 댓글 정렬 설정을 백업합니다.
             const originalSortCookie = document.cookie.match(/(?:^|; )COMMENT_SORT=([^;]*)/)?.[1] || '';
-
-            // 노벨피아 서버가 추천순을 강제 인식하도록 브라우저 쿠키를 'vote'로 임시 변경합니다.
             document.cookie = "COMMENT_SORT=vote; path=/; domain=.novelpia.com; max-age=5;";
-
-            // API 호출 (FormData 형식과 쿼리 스트링 두 영역 모두에 안전하게 정렬 세팅 반영)
             const ch = await postForm(`/proc/novel_comment/${novelId}?page=1&sort=vote`, { sort: "vote" });
-
-            // 데이터를 안전하게 파싱합니다.
             commentRows = Array.from(new DOMParser().parseFromString(ch, 'text/html').querySelectorAll('._comment_flag'));
-
-            // [복구]: 분석 요청이 끝난 즉시 유저가 원래 사용하던 댓글 정렬 상태로 원래대로 되돌립니다.
             if (originalSortCookie) {
                 document.cookie = `COMMENT_SORT=${originalSortCookie}; path=/; domain=.novelpia.com;`;
             } else {
-                // 기존 쿠키가 없었다면 임시 쿠키를 만료시켜 삭제합니다.
                 document.cookie = "COMMENT_SORT=; path=/; domain=.novelpia.com; max-age=0;";
             }
         } catch(e) {
@@ -257,19 +251,20 @@
             modal.style.display = 'none'; hideTooltip();
         } else {
             e.preventDefault();
-            const mw = 390, mh = 420;
+            const mw = 390, mh = 450;
             let left = e.clientX + 10, top = e.clientY + 10;
             if (left + mw > window.innerWidth) left = e.clientX - mw - 10;
             if (top + mh > window.innerHeight) top = e.clientY - mh - 10;
             modal.style.left = `${left}px`; modal.style.top = `${top}px`; modal.style.display = 'block';
 
-            document.getElementById('steam-modal-novel-title').textContent = getCardTitle(clickedEl) || "소설 데이터 분석 중...";
+            document.getElementById('steam-modal-novel-title').textContent = getCardTitle(clickedEl) || "소설 데이터 전수조사 중...";
             document.getElementById('steam-modal-ep-count').textContent = '';
             document.getElementById('steam-modal-rating-val').textContent = "연결 진행 중...";
             document.getElementById('steam-modal-rating-val').className = "steam-rating-value";
-            document.getElementById('steam-modal-sub-text').textContent = "노벨피아 데이터를 로드 중입니다...";
+            document.getElementById('steam-modal-sub-text').textContent = "모든 화수의 조회수 데이터를 병렬 로드 중입니다...";
             document.getElementById('steam-modal-rec-label').textContent = '추천비 점수';
-            ['rec', 'ret', 'comment', 'cycle'].forEach(k => {
+
+            ['rec', 'ret', 'hl', 'comment', 'cycle'].forEach(k => {
                 document.getElementById(`steam-modal-${k}-val`).textContent = "-";
                 document.getElementById(`steam-modal-${k}-bar`).style.width = "0%";
                 document.getElementById(`steam-row-${k}`).dataset.tip = '';
@@ -289,7 +284,6 @@
                 const badges = (novelData.isAdult ? ' 🔞' : '') + (novelData.hasTS ? ' [TS]' : '');
                 document.getElementById('steam-modal-ep-count').textContent = epCount > 0 ? `총 ${epCount}화${badges}` : badges.trim() || '';
 
-                // [수정 핵심]: 엔진으로 매개변수를 넘길 때 누락됐던 세팅, 성인물, TS 여부를 정밀 매핑 주입
                 const rd = await Engine.calculate(
                     novelData.stats,
                     novelData.commentRows,
@@ -311,6 +305,9 @@
                 document.getElementById('steam-modal-ret-val').textContent = `${rd.retentionRateText} (${rd.retScore}점)`;
                 document.getElementById('steam-modal-ret-bar').style.width = `${rd.retScore}%`;
 
+                document.getElementById('steam-modal-hl-val').textContent = `${rd.halfLifeText} (${rd.halfLifeScore}점)`;
+                document.getElementById('steam-modal-hl-bar').style.width = `${rd.halfLifeScore}%`;
+
                 document.getElementById('steam-modal-comment-val').textContent = `${rd.commentText} (${rd.commentScore}점)`;
                 document.getElementById('steam-modal-comment-bar').style.width = `${rd.commentScore}%`;
 
@@ -319,6 +316,7 @@
 
                 document.getElementById('steam-row-rec').dataset.tip     = rd.recTooltip;
                 document.getElementById('steam-row-ret').dataset.tip     = rd.retTooltip;
+                document.getElementById('steam-row-hl').dataset.tip      = rd.halfLifeTooltip;
                 document.getElementById('steam-row-comment').dataset.tip = rd.commentTooltip;
                 document.getElementById('steam-row-cycle').dataset.tip   = rd.cycleTooltip;
 
@@ -332,7 +330,8 @@
     });
 
     document.getElementById('steam-modal-close').addEventListener('click', () => { modal.style.display = 'none'; hideTooltip(); });
-    ['rec', 'ret', 'comment', 'cycle'].forEach(k => {
+
+    ['rec', 'ret', 'hl', 'comment', 'cycle'].forEach(k => {
         const row = document.getElementById(`steam-row-${k}`);
         row.addEventListener('mouseenter', (e) => showTooltip(e, row.dataset.tip));
         row.addEventListener('mousemove', moveTooltip);

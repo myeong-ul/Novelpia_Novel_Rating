@@ -1,11 +1,40 @@
-// 확장 프로그램 라이프사이클 컨텍스트 바인딩 스크립트 (v2.1.0 - 스마트 로컬 캐싱 통합 버전)
+// 확장 프로그램 라이프사이클 컨텍스트 바인딩 스크립트 (v2.2.0 - PC/모바일 하이브리드 & 스마트 캐시 통합)
 (async function() {
     'use strict';
 
+    // 1. 스타일시트 동적 주입 (모바일 화면 대응 뷰포트 스케일링 보정 포함)
     const style = document.createElement('link');
     style.rel = 'stylesheet';
     style.href = chrome.runtime.getURL('styles.css');
     (document.head || document.documentElement).appendChild(style);
+
+    // 모바일 전용 반응형 레이아웃 덮어쓰기 스타일 (styles.css 보완)
+    const mStyle = document.createElement('style');
+    mStyle.textContent = `
+        @media (max-width: 768px) {
+            #steam-rating-modal {
+                position: fixed !important;
+                left: 50% !important;
+                top: 50% !important;
+                bottom: auto !important;
+                right: auto !important;
+                transform: translate(-50%, -50%) !important;
+                width: 90% !important;
+                max-width: 380px !important;
+                box-sizing: border-box !important;
+            }
+            #steam-stat-tooltip {
+                position: fixed !important;
+                left: 50% !important;
+                top: auto !important;
+                bottom: 20px !important;
+                transform: translateX(-50%) !important;
+                width: 85% !important;
+                max-width: 340px !important;
+            }
+        }
+    `;
+    (document.head || document.documentElement).appendChild(mStyle);
 
     let settings = { closeOnScroll: true, tagAdjustEnabled: true };
     chrome.storage.local.get(['closeOnScroll', 'tagAdjustEnabled'], (res) => {
@@ -17,13 +46,17 @@
     tooltip.id = 'steam-stat-tooltip';
     document.body.appendChild(tooltip);
 
-    function showTooltip(e, htmlContent) {
+    // 툴팁 출력 헬퍼 (PC/모바일 교차 지원)
+    function showTooltip(e, htmlContent, isMobile = false) {
         if(!htmlContent) return;
         tooltip.innerHTML = htmlContent;
         tooltip.style.display = 'block';
-        moveTooltip(e);
+        if (!isMobile && e) {
+            moveTooltip(e);
+        }
     }
     function moveTooltip(e) {
+        if (window.innerWidth <= 768) return; // 모바일 화면에선 중앙 하단 고정이므로 연산 패스
         const tw = 264, th = tooltip.offsetHeight || 120;
         let x = e.clientX + 14, y = e.clientY - th / 2;
         if (x + tw > window.innerWidth) x = e.clientX - tw - 14;
@@ -117,7 +150,7 @@
         </div>
         <div class="steam-tip">
             ⚠️ 이 평가는 전수 조사 데이터를 통한 매핑 결과로, 절대적인 기준이 아닙니다.<br>
-            💡 더블 우클릭하면 브라우저 기본 우클릭 메뉴가 열립니다.
+            💡 모바일은 화면 빈 곳 터치 시 창이 닫힙니다.
         </div>
     `;
     document.body.appendChild(modal);
@@ -242,7 +275,6 @@
         return !!el.closest('.rank-novel-cover, .novel-cover, .cover-img, .ep-thumb, .cover_img, .novel-img');
     }
 
-    // 모달창 렌더링 동기화를 위한 공통 드라이버 함수 분리
     function applyDataToModal(rd) {
         document.getElementById('steam-modal-rating-val').textContent = `${rd.rating} (${rd.score}%)`;
         document.getElementById('steam-modal-rating-val').className = `steam-rating-value ${rd.ratingClass}`;
@@ -271,135 +303,225 @@
         document.getElementById('steam-row-cycle').dataset.tip   = rd.cycleTooltip;
     }
 
+    // =========================================================================
+    // 2. 핵심 분석 트리거 및 스마트 캐시 검증 엔진 파트 (PC / Mobile 통합 공용)
+    // =========================================================================
+    async function executeAnalysisPipeline(clickedEl, clientX, clientY) {
+        const isMobile = window.innerWidth <= 768;
+
+        // 모달 위치 분기 연산
+        if (isMobile) {
+            modal.style.left = '50%'; modal.style.top = '50%';
+        } else {
+            const mw = 390, mh = 450;
+            let left = clientX + 10, top = clientY + 10;
+            if (left + mw > window.innerWidth) left = clientX - mw - 10;
+            if (top + mh > window.innerHeight) top = clientY - mh - 10;
+            modal.style.left = `${left}px`; modal.style.top = `${top}px`;
+        }
+        modal.style.display = 'block';
+
+        // 뼈대 UI 초기화
+        document.getElementById('steam-modal-novel-title').textContent = getCardTitle(clickedEl) || "소설 데이터 전수조사 중...";
+        document.getElementById('steam-modal-ep-count').textContent = '';
+        document.getElementById('steam-modal-rating-val').textContent = "연결 진행 중...";
+        document.getElementById('steam-modal-rating-val').className = "steam-rating-value";
+        document.getElementById('steam-modal-sub-text').textContent = "로컬 캐시 조건 검사 중...";
+        document.getElementById('steam-modal-rec-label').textContent = '추천비 점수';
+
+        ['rec', 'ret', 'hl', 'comment', 'cycle'].forEach(k => {
+            document.getElementById(`steam-modal-${k}-val`).textContent = "-";
+            document.getElementById(`steam-modal-${k}-bar`).style.width = "0%";
+            document.getElementById(`steam-row-${k}`).dataset.tip = '';
+        });
+
+        try {
+            const novelId = await resolveNovelId(clickedEl);
+            if (!novelId) {
+                document.getElementById('steam-modal-rating-val').textContent = "식별 실패";
+                document.getElementById('steam-modal-sub-text').textContent = "소설 번호를 찾을 수 없습니다.";
+                return;
+            }
+
+            // [1차 데이터] 오차 검증을 위한 껍데기 통계 실시간 스크랩 (초고속 부하X)
+            const novelData = await loadNovelData(novelId);
+            document.getElementById('steam-modal-novel-title').textContent = novelData.novelTitle;
+
+            const currentEpCount = parseInt(novelData.stats['회차']) || 0;
+            const currentTotalViews = parseInt(novelData.stats['조회']) || 0;
+            const badges = (novelData.isAdult ? ' 🔞' : '') + (novelData.hasTS ? ' [TS]' : '');
+            const epBadgeText = currentEpCount > 0 ? `총 ${currentEpCount}화${badges}` : badges.trim() || '';
+            document.getElementById('steam-modal-ep-count').textContent = epBadgeText;
+
+            // [스마트 캐시] 로컬 스토리지에 백업된 데이터 매핑
+            chrome.storage.local.get([`novel_${novelId}`], async (result) => {
+                const cached = result[`novel_${novelId}`];
+                let useCache = false;
+
+                if (cached) {
+                    const timeDiff = Date.now() - cached.timestamp;
+                    const cacheLimit = 3 * 24 * 60 * 60 * 1000; // 3일 유효 기한 기본 체크
+
+                    // 조건 1: 최신 연재 화수가 완벽히 일치하는지 확인
+                    if (cached.epCount === currentEpCount && timeDiff < cacheLimit) {
+                        // 조건 2: 조회수 오차 변동률이 10% 미만인지 연산
+                        const viewDiff = Math.abs(currentTotalViews - cached.totalViews);
+                        const viewErrorRate = cached.totalViews > 0 ? (viewDiff / cached.totalViews) : 0;
+
+                        if (viewErrorRate < 0.1) {
+                            useCache = true;
+                        }
+                    }
+                }
+
+                // 분기 A: 스마트 캐시 조건 통과 -> 데이터 즉시 사출 후 수명 3일 재연장
+                if (useCache && cached?.scoreData) {
+                    applyDataToModal(cached.scoreData);
+
+                    cached.timestamp = Date.now(); // 만료 기한 3일 롤백 연장
+                    chrome.storage.local.set({ [`novel_${novelId}`]: cached });
+
+                    console.log(`[SteamNovel] 캐시 히트 성공! 소설 ${novelId}의 유효 기간이 오늘부터 3일 재연장되었습니다.`);
+                    return;
+                }
+
+                // 분기 B: 캐시가 없거나 데이터 규격 탈락 -> 정밀 전수조사 파이프라인 가동
+                document.getElementById('steam-modal-sub-text').textContent = "화수/조회수 대격변 감지. 전수조사를 진행합니다...";
+
+                const rd = await Engine.calculate(
+                    novelData.stats,
+                    novelData.commentRows,
+                    novelId,
+                    novelData.isComplete,
+                    novelData.isAdult,
+                    novelData.hasTS,
+                    settings
+                );
+
+                applyDataToModal(rd);
+
+                // 다음 조사를 위해 고유 식별 메타데이터와 함께 캐싱 디스크에 보관
+                const dataToSave = {
+                    timestamp: Date.now(),
+                    epCount: currentEpCount,
+                    totalViews: currentTotalViews,
+                    scoreData: rd
+                };
+                chrome.storage.local.set({ [`novel_${novelId}`]: dataToSave });
+                console.log(`[SteamNovel] 소설 ${novelId} 정밀 분석 성공. 로컬 저장소 스냅샷이 갱신되었습니다.`);
+            });
+
+        } catch(err) {
+            console.error("[SteamNovel] 파이프라인 장애 발령:", err);
+            document.getElementById('steam-modal-rating-val').textContent = "오류 발생";
+            document.getElementById('steam-modal-sub-text').textContent   = "데이터 통신 또는 분석 중 오류가 발생했습니다.";
+        }
+    }
+
+    // =========================================================================
+    // 3. 이벤트 드라이버 바인딩 (PC - 우클릭 / 모바일 - 롱터치 제어)
+    // =========================================================================
+
+    // [PC 전용 인터페이스]
     let lastRightClickTime = 0;
     document.addEventListener('contextmenu', async (e) => {
-        if (!isCoverImage(e.target)) return;
-        const now = Date.now(), clickedEl = e.target;
+        if (window.innerWidth <= 768 || !isCoverImage(e.target)) return;
+        const now = Date.now();
 
         if (now - lastRightClickTime < 500) {
             modal.style.display = 'none'; hideTooltip();
         } else {
             e.preventDefault();
-            const mw = 390, mh = 450;
-            let left = e.clientX + 10, top = e.clientY + 10;
-            if (left + mw > window.innerWidth) left = e.clientX - mw - 10;
-            if (top + mh > window.innerHeight) top = e.clientY - mh - 10;
-            modal.style.left = `${left}px`; modal.style.top = `${top}px`; modal.style.display = 'block';
-
-            document.getElementById('steam-modal-novel-title').textContent = getCardTitle(clickedEl) || "소설 데이터 전수조사 중...";
-            document.getElementById('steam-modal-ep-count').textContent = '';
-            document.getElementById('steam-modal-rating-val').textContent = "연결 진행 중...";
-            document.getElementById('steam-modal-rating-val').className = "steam-rating-value";
-            document.getElementById('steam-modal-sub-text').textContent = "로컬 캐시 및 소설 구조 검사 중...";
-            document.getElementById('steam-modal-rec-label').textContent = '추천비 점수';
-
-            ['rec', 'ret', 'hl', 'comment', 'cycle'].forEach(k => {
-                document.getElementById(`steam-modal-${k}-val`).textContent = "-";
-                document.getElementById(`steam-modal-${k}-bar`).style.width = "0%";
-                document.getElementById(`steam-row-${k}`).dataset.tip = '';
-            });
-
-            try {
-                const novelId = await resolveNovelId(clickedEl);
-                if (!novelId) {
-                    document.getElementById('steam-modal-rating-val').textContent = "식별 실패";
-                    document.getElementById('steam-modal-sub-text').textContent = "소설 번호를 찾을 수 없습니다.";
-                    lastRightClickTime = now; return;
-                }
-
-                // [1단계] 실시간 화수 및 전체 누적 조회수를 수집하기 위해 기본 소설 데이터 1차 로드
-                const novelData = await loadNovelData(novelId);
-                document.getElementById('steam-modal-novel-title').textContent = novelData.novelTitle;
-
-                const currentEpCount = parseInt(novelData.stats['회차']) || 0;
-                const currentTotalViews = parseInt(novelData.stats['조회']) || 0;
-                const badges = (novelData.isAdult ? ' 🔞' : '') + (novelData.hasTS ? ' [TS]' : '');
-                const epBadgeText = currentEpCount > 0 ? `총 ${currentEpCount}화${badges}` : badges.trim() || '';
-                document.getElementById('steam-modal-ep-count').textContent = epBadgeText;
-
-                // [2단계] 로컬 스토리지에 저장된 해당 소설의 기존 분석 스냅샷 확보
-                chrome.storage.local.get([`novel_${novelId}`], async (result) => {
-                    const cached = result[`novel_${novelId}`];
-                    let useCache = false;
-
-                    if (cached) {
-                        const timeDiff = now - cached.timestamp;
-                        const cacheLimit = 3 * 24 * 60 * 60 * 1000; // 기본 3일 제한 유효성 체크
-
-                        // 화수가 일치하는지 먼저 엄격하게 비교
-                        if (cached.epCount === currentEpCount && timeDiff < cacheLimit) {
-                            // 누적 조회수의 절댓값 편차(오차율) 계산
-                            const viewDiff = Math.abs(currentTotalViews - cached.totalViews);
-                            const viewErrorRate = cached.totalViews > 0 ? (viewDiff / cached.totalViews) : 0;
-
-                            // 조회수 편차가 10% 미만(0.1 미만)인 경우 캐시 재사용 승인
-                            if (viewErrorRate < 0.1) {
-                                useCache = true;
-                            }
-                        }
-                    }
-
-                    // [3단계-A] 스마트 캐시 조건 달성 시: 렌더링 후 유효 만료 기간을 다시 3일로 리프레시 연장
-                    if (useCache && cached?.scoreData) {
-                        applyDataToModal(cached.scoreData);
-
-                        // 현재 시간 기준으로 타임스탬프만 업데이트하여 유효기간 재설정 (3일 연장 마법)
-                        cached.timestamp = Date.now();
-                        chrome.storage.local.set({ [`novel_${novelId}`]: cached });
-
-                        console.log(`[SteamNovel] 소설 ${novelId} 캐시 적중! 조건 만족으로 만료 기한이 오늘부터 3일 연장되었습니다.`);
-                        return;
-                    }
-
-                    // [3단계-B] 캐시가 없거나 실시간 조건(화수 변경 or 조회수 10% 이상 대격변) 충족 시: 정밀 전수조사 엔진 가동
-                    document.getElementById('steam-modal-sub-text').textContent = "화수 혹은 조회수 변동 감지. 모든 화수의 조회수 데이터를 병렬 로드 중입니다...";
-
-                    const rd = await Engine.calculate(
-                        novelData.stats,
-                        novelData.commentRows,
-                        novelId,
-                        novelData.isComplete,
-                        novelData.isAdult,
-                        novelData.hasTS,
-                        settings
-                    );
-
-                    // 화면에 새로 계산된 결과 매핑
-                    applyDataToModal(rd);
-
-                    // 다음 조사를 위해 조건 검증 데이터와 함께 새 로컬 캐시 구조 저장
-                    const dataToSave = {
-                        timestamp: Date.now(),
-                        epCount: currentEpCount,         // 다음 우클릭 시 비교용 화수
-                        totalViews: currentTotalViews,   // 다음 우클릭 시 오차 계산용 누적 조회수
-                        scoreData: rd                    // 가공 완료된 결과 오브젝트
-                    };
-                    chrome.storage.local.set({ [`novel_${novelId}`]: dataToSave });
-                    console.log(`[SteamNovel] 소설 ${novelId} 정밀 분석 완료. 기준 정보가 캐시에 새로 세이브되었습니다.`);
-                });
-
-            } catch(err) {
-                console.error("[SteamNovel] 처리 오류:", err);
-                document.getElementById('steam-modal-rating-val').textContent = "오류 발생";
-                document.getElementById('steam-modal-sub-text').textContent   = "데이터 통신 또는 분석 중 오류가 발생했습니다.";
-            }
+            await executeAnalysisPipeline(e.target, e.clientX, e.clientY);
         }
         lastRightClickTime = now;
     });
 
-    document.getElementById('steam-modal-close').addEventListener('click', () => { modal.style.display = 'none'; hideTooltip(); });
+    // [모바일 전용 인터페이스] 롱터치(600ms) 바인딩 및 컨텍스트 메뉴 무력화
+    let touchTimer = null;
+    let longTouched = false;
+    let touchStartEl = null;
 
+    document.addEventListener('touchstart', (e) => {
+        if (!isCoverImage(e.target)) return;
+
+        // 기존 실행 중인 타이머 초기화 (더블 터치 방크 차단)
+        if (touchTimer) clearTimeout(touchTimer);
+
+        longTouched = false;
+        touchStartEl = e.target;
+
+        touchTimer = setTimeout(() => {
+            longTouched = true;
+            const touch = e.touches[0];
+            // 진동 피드백 (모바일 전용 내장 햅틱 브릿지 - 지원 브라우저만 작동)
+            if (navigator.vibrate) navigator.vibrate(40);
+
+            executeAnalysisPipeline(touchStartEl, touch.clientX, touch.clientY);
+        }, 600); // 0.6초 동안 누르고 있으면 실행
+    }, { passive: true });
+
+    document.addEventListener('touchmove', () => {
+        // 유저가 터치 후 화면을 스크롤(드래그)하면 롱터치 인식을 즉시 취소
+        if (touchTimer) { clearTimeout(touchTimer); touchTimer = null; }
+    }, { passive: true });
+
+    document.addEventListener('touchend', (e) => {
+        if (touchTimer) { clearTimeout(touchTimer); touchTimer = null; }
+        if (longTouched) {
+            // 롱터치가 성사되어 모달이 뜬 경우 브라우저 기본 컨텍스트 메뉴나 하이라이트 방지
+            e.preventDefault();
+        }
+    });
+
+    // 툴팁 터치/마우스 호버 가변 이벤트 제어 리스너
     ['rec', 'ret', 'hl', 'comment', 'cycle'].forEach(k => {
         const row = document.getElementById(`steam-row-${k}`);
-        row.addEventListener('mouseenter', (e) => showTooltip(e, row.dataset.tip));
+
+        // PC 이벤트
+        row.addEventListener('mouseenter', (e) => {
+            if (window.innerWidth > 768) showTooltip(e, row.dataset.tip, false);
+        });
         row.addEventListener('mousemove', moveTooltip);
         row.addEventListener('mouseleave', hideTooltip);
+
+        // 모바일 이벤트 (터치 시 중앙 하단에 고정 툴팁 토글)
+        row.addEventListener('touchstart', (e) => {
+            if (window.innerWidth <= 768) {
+                e.stopPropagation();
+                const tipContent = row.dataset.tip;
+                if(tipContent) showTooltip(null, tipContent, true);
+            }
+        }, { passive: true });
     });
+
+    // 전역 창 닫기 핸들러 (PC 스크롤 및 모바일 외부 바깥 빈 화면 터치 대응)
+    document.getElementById('steam-modal-close').addEventListener('click', () => { modal.style.display = 'none'; hideTooltip(); });
+
     document.getElementById('steam-modal-settings-btn').addEventListener('click', () => {
         const p = document.getElementById('steam-modal-settings');
         p.style.display = p.style.display === 'none' ? 'block' : 'none';
     });
+
     document.getElementById('setting-close-on-scroll').addEventListener('change', (e) => { settings.closeOnScroll = e.target.checked; chrome.storage.local.set({closeOnScroll: settings.closeOnScroll}); });
     document.getElementById('setting-tag-adjust').addEventListener('change', (e) => { settings.tagAdjustEnabled = e.target.checked; chrome.storage.local.set({tagAdjustEnabled: settings.tagAdjustEnabled}); });
-    window.addEventListener('scroll', () => { if (settings.closeOnScroll && modal.style.display === 'block') { modal.style.display = 'none'; hideTooltip(); } }, { passive: true });
+
+    window.addEventListener('scroll', () => {
+        if (settings.closeOnScroll && modal.style.display === 'block' && window.innerWidth > 768) {
+            modal.style.display = 'none'; hideTooltip();
+        }
+    }, { passive: true });
+
+    // 모바일 외부 영역 터치 및 바깥 클릭 시 모달/툴팁 증발 레이어
+    const dismissContainer = (e) => {
+        if (modal.style.display === 'block' && !modal.contains(e.target)) {
+            modal.style.display = 'none';
+            hideTooltip();
+        } else if (tooltip.style.display === 'block' && !tooltip.contains(e.target)) {
+            hideTooltip();
+        }
+    };
+    document.addEventListener('click', dismissContainer);
+    document.addEventListener('touchstart', dismissContainer, { passive: true });
+
 })();

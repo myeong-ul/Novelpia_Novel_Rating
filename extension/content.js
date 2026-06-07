@@ -1,4 +1,4 @@
-// 확장 프로그램 라이프사이클 컨텍스트 바인딩 스크립트 (v2.0.0)
+// 확장 프로그램 라이프사이클 컨텍스트 바인딩 스크립트 (v2.1.0 - 스마트 로컬 캐싱 통합 버전)
 (async function() {
     'use strict';
 
@@ -242,6 +242,35 @@
         return !!el.closest('.rank-novel-cover, .novel-cover, .cover-img, .ep-thumb, .cover_img, .novel-img');
     }
 
+    // 모달창 렌더링 동기화를 위한 공통 드라이버 함수 분리
+    function applyDataToModal(rd) {
+        document.getElementById('steam-modal-rating-val').textContent = `${rd.rating} (${rd.score}%)`;
+        document.getElementById('steam-modal-rating-val').className = `steam-rating-value ${rd.ratingClass}`;
+        document.getElementById('steam-modal-sub-text').textContent = rd.subText;
+
+        document.getElementById('steam-modal-rec-label').textContent = `추천비 점수${rd.tagLabel || ''}`;
+        document.getElementById('steam-modal-rec-val').textContent   = `${rd.recRatioText} (${rd.recScore}점)`;
+        document.getElementById('steam-modal-rec-bar').style.width   = `${rd.recScore}%`;
+
+        document.getElementById('steam-modal-ret-val').textContent = `${rd.retentionRateText} (${rd.retScore}점)`;
+        document.getElementById('steam-modal-ret-bar').style.width = `${rd.retScore}%`;
+
+        document.getElementById('steam-modal-hl-val').textContent = `${rd.halfLifeText} (${rd.halfLifeScore}점)`;
+        document.getElementById('steam-modal-hl-bar').style.width = `${rd.halfLifeScore}%`;
+
+        document.getElementById('steam-modal-comment-val').textContent = `${rd.commentText} (${rd.commentScore}점)`;
+        document.getElementById('steam-modal-comment-bar').style.width = `${rd.commentScore}%`;
+
+        document.getElementById('steam-modal-cycle-val').textContent = `${rd.cycleText} (${rd.cycleScore}점)`;
+        document.getElementById('steam-modal-cycle-bar').style.width = `${rd.cycleScore}%`;
+
+        document.getElementById('steam-row-rec').dataset.tip     = rd.recTooltip;
+        document.getElementById('steam-row-ret').dataset.tip     = rd.retTooltip;
+        document.getElementById('steam-row-hl').dataset.tip      = rd.halfLifeTooltip;
+        document.getElementById('steam-row-comment').dataset.tip = rd.commentTooltip;
+        document.getElementById('steam-row-cycle').dataset.tip   = rd.cycleTooltip;
+    }
+
     let lastRightClickTime = 0;
     document.addEventListener('contextmenu', async (e) => {
         if (!isCoverImage(e.target)) return;
@@ -261,7 +290,7 @@
             document.getElementById('steam-modal-ep-count').textContent = '';
             document.getElementById('steam-modal-rating-val').textContent = "연결 진행 중...";
             document.getElementById('steam-modal-rating-val').className = "steam-rating-value";
-            document.getElementById('steam-modal-sub-text').textContent = "모든 화수의 조회수 데이터를 병렬 로드 중입니다...";
+            document.getElementById('steam-modal-sub-text').textContent = "로컬 캐시 및 소설 구조 검사 중...";
             document.getElementById('steam-modal-rec-label').textContent = '추천비 점수';
 
             ['rec', 'ret', 'hl', 'comment', 'cycle'].forEach(k => {
@@ -278,47 +307,76 @@
                     lastRightClickTime = now; return;
                 }
 
+                // [1단계] 실시간 화수 및 전체 누적 조회수를 수집하기 위해 기본 소설 데이터 1차 로드
                 const novelData = await loadNovelData(novelId);
                 document.getElementById('steam-modal-novel-title').textContent = novelData.novelTitle;
-                const epCount = parseInt(novelData.stats['회차']) || 0;
+
+                const currentEpCount = parseInt(novelData.stats['회차']) || 0;
+                const currentTotalViews = parseInt(novelData.stats['조회']) || 0;
                 const badges = (novelData.isAdult ? ' 🔞' : '') + (novelData.hasTS ? ' [TS]' : '');
-                document.getElementById('steam-modal-ep-count').textContent = epCount > 0 ? `총 ${epCount}화${badges}` : badges.trim() || '';
+                const epBadgeText = currentEpCount > 0 ? `총 ${currentEpCount}화${badges}` : badges.trim() || '';
+                document.getElementById('steam-modal-ep-count').textContent = epBadgeText;
 
-                const rd = await Engine.calculate(
-                    novelData.stats,
-                    novelData.commentRows,
-                    novelId,
-                    novelData.isComplete,
-                    novelData.isAdult,
-                    novelData.hasTS,
-                    settings
-                );
+                // [2단계] 로컬 스토리지에 저장된 해당 소설의 기존 분석 스냅샷 확보
+                chrome.storage.local.get([`novel_${novelId}`], async (result) => {
+                    const cached = result[`novel_${novelId}`];
+                    let useCache = false;
 
-                document.getElementById('steam-modal-rating-val').textContent = `${rd.rating} (${rd.score}%)`;
-                document.getElementById('steam-modal-rating-val').className = `steam-rating-value ${rd.ratingClass}`;
-                document.getElementById('steam-modal-sub-text').textContent = rd.subText;
+                    if (cached) {
+                        const timeDiff = now - cached.timestamp;
+                        const cacheLimit = 3 * 24 * 60 * 60 * 1000; // 기본 3일 제한 유효성 체크
 
-                document.getElementById('steam-modal-rec-label').textContent = `추천비 점수${rd.tagLabel}`;
-                document.getElementById('steam-modal-rec-val').textContent   = `${rd.recRatioText} (${rd.recScore}점)`;
-                document.getElementById('steam-modal-rec-bar').style.width   = `${rd.recScore}%`;
+                        // 화수가 일치하는지 먼저 엄격하게 비교
+                        if (cached.epCount === currentEpCount && timeDiff < cacheLimit) {
+                            // 누적 조회수의 절댓값 편차(오차율) 계산
+                            const viewDiff = Math.abs(currentTotalViews - cached.totalViews);
+                            const viewErrorRate = cached.totalViews > 0 ? (viewDiff / cached.totalViews) : 0;
 
-                document.getElementById('steam-modal-ret-val').textContent = `${rd.retentionRateText} (${rd.retScore}점)`;
-                document.getElementById('steam-modal-ret-bar').style.width = `${rd.retScore}%`;
+                            // 조회수 편차가 10% 미만(0.1 미만)인 경우 캐시 재사용 승인
+                            if (viewErrorRate < 0.1) {
+                                useCache = true;
+                            }
+                        }
+                    }
 
-                document.getElementById('steam-modal-hl-val').textContent = `${rd.halfLifeText} (${rd.halfLifeScore}점)`;
-                document.getElementById('steam-modal-hl-bar').style.width = `${rd.halfLifeScore}%`;
+                    // [3단계-A] 스마트 캐시 조건 달성 시: 렌더링 후 유효 만료 기간을 다시 3일로 리프레시 연장
+                    if (useCache && cached?.scoreData) {
+                        applyDataToModal(cached.scoreData);
 
-                document.getElementById('steam-modal-comment-val').textContent = `${rd.commentText} (${rd.commentScore}점)`;
-                document.getElementById('steam-modal-comment-bar').style.width = `${rd.commentScore}%`;
+                        // 현재 시간 기준으로 타임스탬프만 업데이트하여 유효기간 재설정 (3일 연장 마법)
+                        cached.timestamp = Date.now();
+                        chrome.storage.local.set({ [`novel_${novelId}`]: cached });
 
-                document.getElementById('steam-modal-cycle-val').textContent = `${rd.cycleText} (${rd.cycleScore}점)`;
-                document.getElementById('steam-modal-cycle-bar').style.width = `${rd.cycleScore}%`;
+                        console.log(`[SteamNovel] 소설 ${novelId} 캐시 적중! 조건 만족으로 만료 기한이 오늘부터 3일 연장되었습니다.`);
+                        return;
+                    }
 
-                document.getElementById('steam-row-rec').dataset.tip     = rd.recTooltip;
-                document.getElementById('steam-row-ret').dataset.tip     = rd.retTooltip;
-                document.getElementById('steam-row-hl').dataset.tip      = rd.halfLifeTooltip;
-                document.getElementById('steam-row-comment').dataset.tip = rd.commentTooltip;
-                document.getElementById('steam-row-cycle').dataset.tip   = rd.cycleTooltip;
+                    // [3단계-B] 캐시가 없거나 실시간 조건(화수 변경 or 조회수 10% 이상 대격변) 충족 시: 정밀 전수조사 엔진 가동
+                    document.getElementById('steam-modal-sub-text').textContent = "화수 혹은 조회수 변동 감지. 모든 화수의 조회수 데이터를 병렬 로드 중입니다...";
+
+                    const rd = await Engine.calculate(
+                        novelData.stats,
+                        novelData.commentRows,
+                        novelId,
+                        novelData.isComplete,
+                        novelData.isAdult,
+                        novelData.hasTS,
+                        settings
+                    );
+
+                    // 화면에 새로 계산된 결과 매핑
+                    applyDataToModal(rd);
+
+                    // 다음 조사를 위해 조건 검증 데이터와 함께 새 로컬 캐시 구조 저장
+                    const dataToSave = {
+                        timestamp: Date.now(),
+                        epCount: currentEpCount,         // 다음 우클릭 시 비교용 화수
+                        totalViews: currentTotalViews,   // 다음 우클릭 시 오차 계산용 누적 조회수
+                        scoreData: rd                    // 가공 완료된 결과 오브젝트
+                    };
+                    chrome.storage.local.set({ [`novel_${novelId}`]: dataToSave });
+                    console.log(`[SteamNovel] 소설 ${novelId} 정밀 분석 완료. 기준 정보가 캐시에 새로 세이브되었습니다.`);
+                });
 
             } catch(err) {
                 console.error("[SteamNovel] 처리 오류:", err);
